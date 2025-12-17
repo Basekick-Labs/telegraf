@@ -10,10 +10,9 @@ deployment.
 
 ## Global configuration options <!-- @/docs/includes/plugin_config.md -->
 
-In addition to the plugin-specific configuration settings, plugins support
-additional global and plugin configuration settings. These settings are used to
-modify metrics, tags, and field or create aliases and configure ordering, etc.
-See the [CONFIGURATION.md][CONFIGURATION.md] for more details.
+Plugins support additional global and plugin configuration settings for tasks
+such as modifying metrics, tags, and fields, creating aliases, and configuring
+plugin ordering. See [CONFIGURATION.md][CONFIGURATION.md] for more details.
 
 [CONFIGURATION.md]: ../../../docs/CONFIGURATION.md#plugins
 
@@ -46,6 +45,7 @@ to use them.
   ## Information to include in the message, available options are
   ##   hostname   -- hostname of the instance running Telegraf
   ##   statistics -- number of metrics, logged errors and warnings, etc
+  ##   configs    -- redacted list of configs loaded by this instance
   # include = ["hostname"]
 
   ## Additional HTTP headers
@@ -60,10 +60,32 @@ used for the message. The latest schema can be found in the
 
 Additional information can be included in the message via the `include` setting.
 
+> [!NOTE]
+> Some information, e.g. the number of metrics, is only updated after the first
+> flush cycle, this must be considered when interpreting the messages.
+
 Statistics included in heartbeat messages are accumulated since the last
 successful heartbeat. If a heartbeat cannot be sent, accumulation of data
 continues until the next successful send. Additionally, message after a failed
 send the `last` field contains the Unix timestamp of the last successful
 heartbeat, allowing you to identify gaps in reporting and to calculate rates.
+
+### Configuration information
+
+When including `configs` in the message, the heartbeat message will contain the
+configuration sources used to setup the currently running Telegraf instance.
+
+> [!WARNING]
+> As the configuration sources contains the path or the URL, the resulting
+> heartbeat messages may be large. Use this option with care if network
+> traffic is a limiting factor!
+
+The configuration information can potentially change when watching e.g. the
+configuration directory while a new configuration is added or removed.
+
+> [!IMPORTANT]
+> Configuration URLs are redacted to remove the username and password
+> information. However, sensitive information might still be contained in the
+> URL or the path sent. Use with care!
 
 [schema]: /plugins/outputs/heartbeat/schema_v1.json
