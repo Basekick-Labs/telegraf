@@ -597,7 +597,8 @@ func (m *Mysql) gatherGlobalVariables(db *sql.DB, servtag string, acc telegraf.A
 				acc.AddError(errString)
 			}
 		} else {
-			fields[key] = value
+			// v2.ConvertGlobalVariables can parse "complex" multi-value fields, e.g. wsrep_provider_options
+			parseKeyValues(fields, key, value)
 		}
 
 		// Send 20 fields at a time
@@ -728,6 +729,7 @@ func gatherBinaryLogs(db *sql.DB, servtag string, acc telegraf.Accumulator) erro
 		fileSize  uint64
 		fileName  string
 		encrypted string
+		algorithm string
 	)
 
 	columns, err := rows.Columns()
@@ -738,11 +740,16 @@ func gatherBinaryLogs(db *sql.DB, servtag string, acc telegraf.Accumulator) erro
 
 	// iterate over rows and count the size and count of files
 	for rows.Next() {
-		if numColumns == 3 {
+		switch numColumns {
+		case 3:
 			if err := rows.Scan(&fileName, &fileSize, &encrypted); err != nil {
 				return err
 			}
-		} else {
+		case 4: // Compatible with versions that include encryption algorithms.
+			if err := rows.Scan(&fileName, &fileSize, &encrypted, &algorithm); err != nil {
+				return err
+			}
+		default:
 			if err := rows.Scan(&fileName, &fileSize); err != nil {
 				return err
 			}
@@ -1374,8 +1381,6 @@ func (m *Mysql) gatherInnoDBMetrics(db *sql.DB, servtag string, acc telegraf.Acc
 // gatherPerfSummaryPerAccountPerEvent can be used to fetch enabled metrics from
 // performance_schema.events_statements_summary_by_account_by_event_name
 func (m *Mysql) gatherPerfSummaryPerAccountPerEvent(db *sql.DB, servtag string, acc telegraf.Accumulator) error {
-	sqlQuery := perfSummaryPerAccountPerEvent
-
 	var rows *sql.Rows
 	var err error
 
@@ -1412,17 +1417,19 @@ func (m *Mysql) gatherPerfSummaryPerAccountPerEvent(db *sql.DB, servtag string, 
 	var events []interface{}
 	// if we have perf_summary_events set - select only listed events (adding filter criteria for rows)
 	if len(m.PerfSummaryEvents) > 0 {
-		sqlQuery += " WHERE EVENT_NAME IN ("
+		var sqlQueryBuilder strings.Builder
+		sqlQueryBuilder.WriteString(perfSummaryPerAccountPerEvent)
+		sqlQueryBuilder.WriteString(" WHERE EVENT_NAME IN (")
 		for i, eventName := range m.PerfSummaryEvents {
 			if i > 0 {
-				sqlQuery += ", "
+				sqlQueryBuilder.WriteString(", ")
 			}
-			sqlQuery += "?"
+			sqlQueryBuilder.WriteString("?")
 			events = append(events, eventName)
 		}
-		sqlQuery += ")"
+		sqlQueryBuilder.WriteString(")")
 
-		rows, err = db.Query(sqlQuery, events...)
+		rows, err = db.Query(sqlQueryBuilder.String(), events...)
 	} else {
 		// otherwise no filter, hence, select all rows
 		rows, err = db.Query(perfSummaryPerAccountPerEvent)
