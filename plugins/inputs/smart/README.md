@@ -43,6 +43,7 @@ plugin ordering. See [CONFIGURATION.md][CONFIGURATION.md] for more details.
 
     ## On most platforms used cli utilities requires root access.
     ## Setting 'use_sudo' to true will make use of sudo to run smartctl or nvme-cli.
+    ## On OpenBSD, doas is used instead of sudo.
     ## Sudo must be configured to allow the telegraf user to run smartctl or nvme-cli
     ## without a password.
     # use_sudo = false
@@ -111,6 +112,12 @@ Cmnd_Alias NVME = /path/to/nvme
 telegraf  ALL=(ALL) NOPASSWD: NVME
 Defaults!NVME !logfile, !syslog, !pam_session
 ```
+
+> [!NOTE]
+> 🪲 If you are using `sudo-rs` instead of GNU `sudo`, the `Defaults!SMARTCTL`
+> and `Defaults!NVME` lines have to be removed as these logging options are not
+> currently supported and will cause errors running sudo until that is resolved.
+> See trifectatechfoundation/sudo-rs#1181.
 
 To run smartctl or nvme with `sudo` wrapper script can be
 created. `path_smartctl` or `path_nvme` in the configuration should be set to

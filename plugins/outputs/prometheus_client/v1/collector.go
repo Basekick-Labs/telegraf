@@ -2,6 +2,7 @@ package v1
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -115,7 +116,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		for _, sample := range family.Samples {
 			// Get labels for this sample; unset labels will be set to the
 			// empty string
-			var labels []string
+			labels := make([]string, 0, len(labelNames))
 			for _, label := range labelNames {
 				v := sample.Labels[label]
 				labels = append(labels, v)
@@ -195,10 +196,8 @@ func (c *Collector) addMetricFamily(point telegraf.Metric, sample *Sample, mname
 // made to avoid modifying the input metric slice since doing so is not
 // allowed.
 func sorted(metrics []telegraf.Metric) []telegraf.Metric {
-	batch := make([]telegraf.Metric, 0, len(metrics))
-	for i := len(metrics) - 1; i >= 0; i-- {
-		batch = append(batch, metrics[i])
-	}
+	batch := slices.Clone(metrics)
+	slices.Reverse(batch)
 	sort.Slice(batch, func(i, j int) bool {
 		return batch[i].Time().Before(batch[j].Time())
 	})

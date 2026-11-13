@@ -31,11 +31,11 @@ plugin ordering. See [CONFIGURATION.md][CONFIGURATION.md] for more details.
 
 [CONFIGURATION.md]: ../../../docs/CONFIGURATION.md#plugins
 
-## Secret-store support
+## Secret store support
 
-This plugin supports secrets from secret-stores for the `sec_name`,
+This plugin supports secrets from secret stores for the `sec_name`,
 `auth_password` and `priv_password` option.
-See the [secret-store documentation][SECRETSTORE] for more details on how
+See the [secret store documentation][SECRETSTORE] for more details on how
 to use them.
 
 [SECRETSTORE]: ../../../docs/CONFIGURATION.md#secret-store-secrets
@@ -78,6 +78,11 @@ to use them.
   # priv_protocol = ""
   ## Privacy password used for encrypted messages.
   # priv_password = ""
+  ## Local engine ID as hex string, used to answer the engine discovery of
+  ## SNMPv3 inform senders. If not set, a random ID is generated on startup.
+  ## Senders may use this ID in the engine_id tag, so set it if a stable value
+  ## is required.
+  # engine_id = "0x80001f888001020304"
 ```
 
 ### SNMP backend: `gosmi` vs `netsnmp`

@@ -13,6 +13,7 @@ import (
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/config"
 	"github.com/influxdata/telegraf/internal"
+	"github.com/influxdata/telegraf/metric"
 	"github.com/influxdata/telegraf/models"
 	"github.com/influxdata/telegraf/plugins/parsers/influx"
 	"github.com/influxdata/telegraf/testutil"
@@ -168,8 +169,10 @@ func TestPersistentClientIDFail(t *testing.T) {
 }
 
 type message struct {
-	topic string
-	qos   byte
+	topic    string
+	qos      byte
+	retained bool
+	acked    bool
 }
 
 func (*message) Duplicate() bool {
@@ -180,8 +183,8 @@ func (m *message) Qos() byte {
 	return m.qos
 }
 
-func (*message) Retained() bool {
-	panic("not implemented")
+func (m *message) Retained() bool {
+	return m.retained
 }
 
 func (m *message) Topic() string {
@@ -196,8 +199,8 @@ func (*message) Payload() []byte {
 	return []byte("cpu time_idle=42i")
 }
 
-func (*message) Ack() {
-	panic("not implemented")
+func (m *message) Ack() {
+	m.acked = true
 }
 
 func TestTopicTag(t *testing.T) {
@@ -216,12 +219,12 @@ func TestTopicTag(t *testing.T) {
 				return nil
 			},
 			expected: []telegraf.Metric{
-				testutil.MustMetric(
+				metric.New(
 					"cpu",
 					map[string]string{
 						"topic": "telegraf",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"time_idle": 42,
 					},
 					time.Unix(0, 0),
@@ -236,12 +239,12 @@ func TestTopicTag(t *testing.T) {
 				return &tag
 			},
 			expected: []telegraf.Metric{
-				testutil.MustMetric(
+				metric.New(
 					"cpu",
 					map[string]string{
 						"topic_tag": "telegraf",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"time_idle": 42,
 					},
 					time.Unix(0, 0),
@@ -256,10 +259,10 @@ func TestTopicTag(t *testing.T) {
 				return &tag
 			},
 			expected: []telegraf.Metric{
-				testutil.MustMetric(
+				metric.New(
 					"cpu",
 					map[string]string{},
-					map[string]interface{}{
+					map[string]any{
 						"time_idle": 42,
 					},
 					time.Unix(0, 0),
@@ -285,12 +288,12 @@ func TestTopicTag(t *testing.T) {
 				},
 			},
 			expected: []telegraf.Metric{
-				testutil.MustMetric(
+				metric.New(
 					"test",
 					map[string]string{
 						"testTag": "telegraf",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"testNumber": 123,
 						"time_idle":  42,
 					},
@@ -317,12 +320,12 @@ func TestTopicTag(t *testing.T) {
 				},
 			},
 			expected: []telegraf.Metric{
-				testutil.MustMetric(
+				metric.New(
 					"test",
 					map[string]string{
 						"testTag": "telegraf",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"testNumber": 123,
 						"testString": "hello",
 						"time_idle":  42,
@@ -351,12 +354,12 @@ func TestTopicTag(t *testing.T) {
 				},
 			},
 			expected: []telegraf.Metric{
-				testutil.MustMetric(
+				metric.New(
 					"test",
 					map[string]string{
 						"testTag": "telegraf",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"testNumber": 123,
 						"testString": "hello",
 						"time_idle":  42,
@@ -383,12 +386,12 @@ func TestTopicTag(t *testing.T) {
 				},
 			},
 			expected: []telegraf.Metric{
-				testutil.MustMetric(
+				metric.New(
 					"test",
 					map[string]string{
 						"testTag": "telegraf",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"time_idle": 42,
 					},
 					time.Unix(0, 0),
@@ -413,12 +416,12 @@ func TestTopicTag(t *testing.T) {
 				},
 			},
 			expected: []telegraf.Metric{
-				testutil.MustMetric(
+				metric.New(
 					"cpu",
 					map[string]string{
 						"testTag": "telegraf",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"testNumber": 123,
 						"testString": "hello",
 						"time_idle":  42,
@@ -446,12 +449,12 @@ func TestTopicTag(t *testing.T) {
 				},
 			},
 			expected: []telegraf.Metric{
-				testutil.MustMetric(
+				metric.New(
 					"test",
 					map[string]string{
 						"testTag": "telegraf",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"testNumber": 123,
 						"testString": "hello",
 						"time_idle":  42,
@@ -479,13 +482,13 @@ func TestTopicTag(t *testing.T) {
 				},
 			},
 			expected: []telegraf.Metric{
-				testutil.MustMetric(
+				metric.New(
 					"test",
 					map[string]string{
 						"testTag": "telegraf",
 						"moreTag": "foo",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"testNumber": 123,
 						"testString": "hello",
 						"time_idle":  42,
@@ -513,10 +516,10 @@ func TestTopicTag(t *testing.T) {
 				},
 			},
 			expected: []telegraf.Metric{
-				testutil.MustMetric(
+				metric.New(
 					"cpu",
 					map[string]string{},
-					map[string]interface{}{
+					map[string]any{
 						"time_idle": 42,
 					},
 					time.Unix(0, 0),
@@ -571,6 +574,124 @@ func TestTopicTag(t *testing.T) {
 
 			plugin.Stop()
 
+			testutil.RequireMetricsEqual(t, tt.expected, acc.GetTelegrafMetrics(), testutil.IgnoreTime())
+		})
+	}
+}
+
+func TestOmitRetained(t *testing.T) {
+	expectedMetric := []telegraf.Metric{
+		metric.New(
+			"cpu",
+			map[string]string{
+				"topic": "telegraf",
+			},
+			map[string]any{
+				"time_idle": 42,
+			},
+			time.Unix(0, 0),
+		),
+	}
+
+	tests := []struct {
+		name              string
+		omitRetained      bool
+		persistentSession bool
+		retained          bool
+		expected          []telegraf.Metric
+		expectedAcked     bool
+		expectedSem       int
+	}{
+		{
+			name:         "omit_retained false with non-retained message",
+			omitRetained: false,
+			retained:     false,
+			expected:     expectedMetric,
+			expectedSem:  1,
+		},
+		{
+			name:         "omit_retained false with retained message",
+			omitRetained: false,
+			retained:     true,
+			expected:     expectedMetric,
+			expectedSem:  1,
+		},
+		{
+			name:         "omit_retained true with non-retained message",
+			omitRetained: true,
+			retained:     false,
+			expected:     expectedMetric,
+			expectedSem:  1,
+		},
+		{
+			name:              "omit_retained true with retained message and persistent_session false",
+			omitRetained:      true,
+			persistentSession: false,
+			retained:          true,
+			expected:          nil,
+			expectedAcked:     false,
+			expectedSem:       0,
+		},
+		{
+			name:              "omit_retained true with retained message and persistent_session true",
+			omitRetained:      true,
+			persistentSession: true,
+			retained:          true,
+			expected:          nil,
+			expectedAcked:     true,
+			expectedSem:       0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var handler mqtt.MessageHandler
+			fClient := &fakeClient{
+				connectF: func() mqtt.Token {
+					return &fakeToken{}
+				},
+				addRouteF: func(callback mqtt.MessageHandler) {
+					handler = callback
+				},
+				subscribeMultipleF: func() mqtt.Token {
+					return &fakeToken{}
+				},
+				disconnectF: func() {
+				},
+			}
+
+			plugin := newMQTTConsumer(func(o *mqtt.ClientOptions) client {
+				fClient.opts = o
+				return fClient
+			})
+			plugin.Log = testutil.Logger{}
+			plugin.Topics = []string{"telegraf"}
+			plugin.OmitRetained = tt.omitRetained
+			plugin.PersistentSession = tt.persistentSession
+			if tt.persistentSession {
+				plugin.ClientID = "test"
+			}
+
+			parser := &influx.Parser{}
+			require.NoError(t, parser.Init())
+			plugin.SetParser(parser)
+
+			require.NoError(t, plugin.Init())
+
+			var acc testutil.Accumulator
+			require.NoError(t, plugin.Start(&acc))
+
+			m := message{
+				topic:    "telegraf",
+				retained: tt.retained,
+			}
+
+			handler(nil, &m)
+
+			plugin.Stop()
+
+			require.Equal(t, tt.expectedAcked, m.acked)
+			require.Len(t, plugin.sem, tt.expectedSem)
 			testutil.RequireMetricsEqual(t, tt.expected, acc.GetTelegrafMetrics(), testutil.IgnoreTime())
 		})
 	}

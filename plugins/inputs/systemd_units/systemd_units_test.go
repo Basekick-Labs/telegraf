@@ -6,7 +6,9 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net"
 	"os/user"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +21,7 @@ import (
 	"github.com/influxdata/telegraf/filter"
 	"github.com/influxdata/telegraf/internal"
 	"github.com/influxdata/telegraf/metric"
+	"github.com/influxdata/telegraf/models"
 	"github.com/influxdata/telegraf/testutil"
 )
 
@@ -29,7 +32,7 @@ type properties struct {
 	ufPreset      string
 	ufState       string
 	ufActiveEnter uint64
-	properties    map[string]interface{}
+	properties    map[string]any
 }
 
 func TestDefaultPattern(t *testing.T) {
@@ -113,7 +116,7 @@ func TestListFiles(t *testing.T) {
 						"active": "active",
 						"sub":    "running",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"load_code":   0,
 						"active_code": 0,
 						"sub_code":    0,
@@ -145,7 +148,7 @@ func TestListFiles(t *testing.T) {
 						"active": "active",
 						"sub":    "exited",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"load_code":   0,
 						"active_code": 0,
 						"sub_code":    4,
@@ -177,7 +180,7 @@ func TestListFiles(t *testing.T) {
 						"active": "failed",
 						"sub":    "failed",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"load_code":   0,
 						"active_code": 3,
 						"sub_code":    12,
@@ -209,7 +212,7 @@ func TestListFiles(t *testing.T) {
 						"active": "inactive",
 						"sub":    "dead",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"load_code":   2,
 						"active_code": 2,
 						"sub_code":    1,
@@ -304,7 +307,7 @@ func TestShow(t *testing.T) {
 					ufPreset:      "disabled",
 					ufState:       "enabled",
 					ufActiveEnter: uint64(enter),
-					properties: map[string]interface{}{
+					properties: map[string]any{
 						"Id":                "example.service",
 						"StatusErrno":       0,
 						"NRestarts":         1,
@@ -328,7 +331,7 @@ func TestShow(t *testing.T) {
 						"state":  "enabled",
 						"preset": "disabled",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"load_code":                 0,
 						"active_code":               0,
 						"sub_code":                  0,
@@ -360,7 +363,7 @@ func TestShow(t *testing.T) {
 					ufPreset:      "disabled",
 					ufState:       "enabled",
 					ufActiveEnter: 0,
-					properties: map[string]interface{}{
+					properties: map[string]any{
 						"Id":          "example.service",
 						"StatusErrno": 0,
 						"NRestarts":   0,
@@ -378,7 +381,7 @@ func TestShow(t *testing.T) {
 						"state":  "enabled",
 						"preset": "disabled",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"load_code":                 0,
 						"active_code":               0,
 						"sub_code":                  4,
@@ -409,7 +412,7 @@ func TestShow(t *testing.T) {
 					ufPreset:      "disabled",
 					ufState:       "enabled",
 					ufActiveEnter: uint64(enter),
-					properties: map[string]interface{}{
+					properties: map[string]any{
 						"Id":                "example.service",
 						"StatusErrno":       10,
 						"NRestarts":         1,
@@ -432,7 +435,7 @@ func TestShow(t *testing.T) {
 						"state":  "enabled",
 						"preset": "disabled",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"load_code":                 0,
 						"active_code":               3,
 						"sub_code":                  12,
@@ -463,7 +466,7 @@ func TestShow(t *testing.T) {
 					ufPreset:      "disabled",
 					ufState:       "enabled",
 					ufActiveEnter: uint64(0),
-					properties: map[string]interface{}{
+					properties: map[string]any{
 						"Id": "example.service",
 					},
 				},
@@ -479,7 +482,7 @@ func TestShow(t *testing.T) {
 						"state":  "enabled",
 						"preset": "disabled",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"load_code":                 2,
 						"active_code":               2,
 						"sub_code":                  1,
@@ -507,7 +510,7 @@ func TestShow(t *testing.T) {
 					},
 					ufPreset: "unknown",
 					ufState:  "unknown",
-					properties: map[string]interface{}{
+					properties: map[string]any{
 						"Id": "example.service",
 					},
 				},
@@ -528,7 +531,7 @@ func TestShow(t *testing.T) {
 					ufPreset:      "disabled",
 					ufState:       "disabled",
 					ufActiveEnter: uint64(0),
-					properties: map[string]interface{}{
+					properties: map[string]any{
 						"Id":                "example.service",
 						"StatusErrno":       0,
 						"NRestarts":         0,
@@ -551,7 +554,7 @@ func TestShow(t *testing.T) {
 						"state":  "disabled",
 						"preset": "disabled",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"load_code":                 0,
 						"active_code":               int64(2),
 						"sub_code":                  1,
@@ -625,7 +628,7 @@ func TestMultiInstance(t *testing.T) {
 						"active": "active",
 						"sub":    "running",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"load_code":   0,
 						"active_code": 0,
 						"sub_code":    0,
@@ -640,7 +643,7 @@ func TestMultiInstance(t *testing.T) {
 						"active": "active",
 						"sub":    "running",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"load_code":   0,
 						"active_code": 0,
 						"sub_code":    0,
@@ -655,7 +658,7 @@ func TestMultiInstance(t *testing.T) {
 						"active": "active",
 						"sub":    "exited",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"load_code":   0,
 						"active_code": 0,
 						"sub_code":    4,
@@ -676,7 +679,7 @@ func TestMultiInstance(t *testing.T) {
 						"active": "active",
 						"sub":    "running",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"load_code":   0,
 						"active_code": 0,
 						"sub_code":    0,
@@ -691,7 +694,7 @@ func TestMultiInstance(t *testing.T) {
 						"active": "active",
 						"sub":    "exited",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"load_code":   0,
 						"active_code": 0,
 						"sub_code":    4,
@@ -712,7 +715,7 @@ func TestMultiInstance(t *testing.T) {
 						"active": "active",
 						"sub":    "exited",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"load_code":   0,
 						"active_code": 0,
 						"sub_code":    4,
@@ -733,7 +736,7 @@ func TestMultiInstance(t *testing.T) {
 						"active": "inactive",
 						"sub":    "dead",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"load_code":   0,
 						"active_code": 2,
 						"sub_code":    1,
@@ -754,7 +757,7 @@ func TestMultiInstance(t *testing.T) {
 						"active": "inactive",
 						"sub":    "dead",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"load_code":   1,
 						"active_code": 2,
 						"sub_code":    1,
@@ -866,6 +869,49 @@ func TestMultiInstance(t *testing.T) {
 	}
 }
 
+func TestErrorBehaviorRetry(t *testing.T) {
+	// Leave a socket file without a listener behind so connecting is refused
+	socket := filepath.Join(t.TempDir(), "system_bus_socket")
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socket, Net: "unix"})
+	require.NoError(t, err)
+	listener.SetUnlinkOnClose(false)
+	require.NoError(t, listener.Close())
+	t.Setenv("DBUS_SYSTEM_BUS_ADDRESS", "unix:path="+socket)
+
+	plugin := &SystemdUnits{
+		Timeout: config.Duration(time.Second),
+	}
+	model := models.NewRunningInput(plugin, &models.InputConfig{
+		Name:                 "systemd_units",
+		StartupErrorBehavior: "retry",
+	})
+	require.NoError(t, model.Init())
+	defer model.Stop()
+
+	// With "retry" the model swallows a retry-able startup error and
+	// tries again on the next gather
+	var acc testutil.Accumulator
+	require.NoError(t, model.Start(&acc))
+	require.ErrorIs(t, model.Gather(&acc), internal.ErrNotConnected)
+}
+
+func TestErrorBehaviorRetryMissingBus(t *testing.T) {
+	// A bus socket that does not exist won't appear later, so don't retry
+	t.Setenv("DBUS_SYSTEM_BUS_ADDRESS", "unix:path=/nonexistent/system_bus_socket")
+	plugin := &SystemdUnits{
+		Timeout: config.Duration(time.Second),
+	}
+	model := models.NewRunningInput(plugin, &models.InputConfig{
+		Name:                 "systemd_units",
+		StartupErrorBehavior: "retry",
+	})
+	require.NoError(t, model.Init())
+	defer model.Stop()
+
+	var acc testutil.Accumulator
+	require.ErrorContains(t, model.Start(&acc), "connecting to the system bus failed")
+}
+
 func BenchmarkAllUnitsIntegration(b *testing.B) {
 	plugin := &SystemdUnits{
 		CollectDisabled: true,
@@ -973,7 +1019,7 @@ func (c *fakeClient) ListUnitsByNamesContext(_ context.Context, units []string) 
 	return states, nil
 }
 
-func (c *fakeClient) GetUnitTypePropertiesContext(_ context.Context, unit, unitType string) (map[string]interface{}, error) {
+func (c *fakeClient) GetUnitTypePropertiesContext(_ context.Context, unit, unitType string) (map[string]any, error) {
 	u, found := c.units[unit]
 	if !found {
 		return nil, nil
@@ -984,13 +1030,13 @@ func (c *fakeClient) GetUnitTypePropertiesContext(_ context.Context, unit, unitT
 	return u.properties, nil
 }
 
-func (c *fakeClient) GetUnitPropertiesContext(_ context.Context, unit string) (map[string]interface{}, error) {
+func (c *fakeClient) GetUnitPropertiesContext(_ context.Context, unit string) (map[string]any, error) {
 	u, found := c.units[unit]
 	if !found {
 		return nil, nil
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"UnitFileState":        u.ufState,
 		"UnitFilePreset":       u.ufPreset,
 		"ActiveEnterTimestamp": u.ufActiveEnter,
@@ -1039,7 +1085,7 @@ func oldParseListUnits(line string) ([]telegraf.Metric, error) {
 	if subCode, ok = subMap[sub]; !ok {
 		return nil, fmt.Errorf("parsing field field 'sub' failed, value not in map: %s", sub)
 	}
-	fields := map[string]interface{}{
+	fields := map[string]any{
 		"load_code":   loadCode,
 		"active_code": activeCode,
 		"sub_code":    subCode,

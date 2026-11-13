@@ -141,6 +141,13 @@ More details about metrics can be found at the links below:
 || cpu.cache.monitor.\<num\>.bank.count | bank_count | the number of cache banks in cache monitor \<num\>, not available for kernels from 4.14 upwards |
 || cpu.cache.monitor.\<num\>.bank.\<index\>.id | id|host allocated cache id for bank \<index\> in cache monitor \<num\>, not available for kernels from 4.14 upwards |
 || cpu.cache.monitor.\<num\>.bank.\<index\>.bytes | bytes | the number of bytes of last level cache that the domain is using on cache bank \<index\>, not available for kernels from 4.14 upwards|
+|| cpu.energy.monitor.count | count | the number of resctrl energy monitors for this domain, available with libvirt 12.4.0 or later (exposed as `libvirt_cpu_energy_monitor_total`) |
+|| cpu.energy.monitor.\<num\>.name | name | the name of energy monitor \<num\> (exposed as `libvirt_cpu_energy_monitor`) |
+|| cpu.energy.monitor.\<num\>.vcpus | vcpus | the optional (since 12.8.0) vCPU list of energy monitor \<num\>; omitted for whole-process monitors |
+|| cpu.energy.monitor.\<num\>.pkg.count | pkg_count | the number of CPU packages reported by energy monitor \<num\> |
+|| cpu.energy.monitor.\<num\>.pkg.\<index\>.id | id | host package ID for package \<index\> in energy monitor \<num\> (exposed as `libvirt_cpu_energy_monitor_pkg`) |
+|| cpu.energy.monitor.\<num\>.pkg.\<index\>.core_energy | core_energy | cumulative core energy in Joules consumed by package \<index\> in energy monitor \<num\> |
+|| cpu.energy.monitor.\<num\>.pkg.\<index\>.activity | activity | cumulative activity counter in nanofarads (nF) for package \<index\> in energy monitor \<num\> |
 | **balloon** | balloon.current | current | the memory in KiB currently used |
 || balloon.maximum | maximum | the maximum memory in KiB allowed |
 || balloon.swap_in | swap_in | the amount of data read from swap space (in KiB) |
@@ -250,7 +257,7 @@ libvirt_vcpu,domain_name=U22,host=localhost,vcpu_id=1 state=1i,time=182884000000
 libvirt_net_total,domain_name=U22,host=localhost count=1i 1662383709000000000
 libvirt_net,domain_name=U22,host=localhost,interface_id=0 name="vnet0",rx_bytes=110i,rx_pkts=1i,rx_errs=0i,rx_drop=31007i,tx_bytes=0i,tx_pkts=0i,tx_errs=0i,tx_drop=0i 1662383709000000000
 libvirt_block_total,domain_name=U22,host=localhost count=1i 1662383709000000000
-libvirt_block,domain_name=U22,host=localhost,block_id=0 rd=17337818234i,path=name="vda",backingIndex=1i,path="/tmp/ubuntu_image.img",rd_reqs=11354i,rd_bytes=330314752i,rd_times=6240559566i,wr_reqs=52440i,wr_bytes=1183828480i,wr_times=21887150375i,fl_reqs=32250i,fl_times=23158998353i,errors=0i,allocation=770048000i,capacity=2361393152i,physical=770052096i,threshold=2147483648i
+libvirt_block,domain_name=U22,host=localhost,block_id=0 name="vda",backingIndex=1i,path="/tmp/ubuntu_image.img",rd_reqs=11354i,rd_bytes=330314752i,rd_times=6240559566i,wr_reqs=52440i,wr_bytes=1183828480i,wr_times=21887150375i,fl_reqs=32250i,fl_times=23158998353i,errors=0i,allocation=770048000i,capacity=2361393152i,physical=770052096i,threshold=2147483648i
 libvirt_perf,domain_name=U22,host=localhost cmt=19087360i,mbmt=77168640i,mbml=67788800i,cpu_cycles=29858995122i,instructions=0i,cache_references=3053301695i,cache_misses=609441024i,branch_instructions=2623890194i,branch_misses=103707961i,bus_cycles=188105628i,stalled_cycles_frontend=0i,stalled_cycles_backend=0i,ref_cpu_cycles=30766094039i,cpu_clock=25166642695i,task_clock=25263578917i,page_faults=2670i,context_switches=294284i,cpu_migrations=17949i,page_faults_min=2670i,page_faults_maj=0i,alignment_faults=0i,emulation_faults=0i 1662383709000000000
 libvirt_dirtyrate,domain_name=U22,host=localhost calc_status=2i,calc_start_time=348414i,calc_period=1i,dirtyrate.megabytes_per_second=4i,calc_mode="dirty-ring" 1662383709000000000
 libvirt_dirtyrate_vcpu,domain_name=U22,host=localhost,vcpu_id=0 megabytes_per_second=2i 1662383709000000000

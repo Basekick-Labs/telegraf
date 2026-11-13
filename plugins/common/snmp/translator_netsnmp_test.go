@@ -9,7 +9,7 @@ import (
 	"github.com/influxdata/telegraf/testutil"
 )
 
-func TestFieldInit(t *testing.T) {
+func TestFieldInitNetsnmp(t *testing.T) {
 	translations := []struct {
 		inputOid           string
 		inputName          string
@@ -42,7 +42,7 @@ func TestFieldInit(t *testing.T) {
 	}
 }
 
-func TestTableInit(t *testing.T) {
+func TestTableInitNetsnmp(t *testing.T) {
 	tbl := Table{
 		Oid: ".1.0.0.0",
 		Fields: []Field{
@@ -83,7 +83,7 @@ func TestTableInit(t *testing.T) {
 	require.Empty(t, tbl.Fields[1].Conversion)
 }
 
-func TestTableBuild_walk(t *testing.T) {
+func TestTableBuildWalkNetsnmp(t *testing.T) {
 	tbl := Table{
 		Name:       "mytable",
 		IndexAsTag: true,
@@ -136,7 +136,7 @@ func TestTableBuild_walk(t *testing.T) {
 			"myfield1": "foo",
 			"index":    "0",
 		},
-		Fields: map[string]interface{}{
+		Fields: map[string]any{
 			"myfield2": 1,
 			"myfield3": float64(0.123),
 			"myfield4": 11,
@@ -150,7 +150,7 @@ func TestTableBuild_walk(t *testing.T) {
 			"myfield1": "bar",
 			"index":    "1",
 		},
-		Fields: map[string]interface{}{
+		Fields: map[string]any{
 			"myfield2": 2,
 			"myfield3": float64(0.456),
 			"myfield4": 22,
@@ -161,7 +161,7 @@ func TestTableBuild_walk(t *testing.T) {
 		Tags: map[string]string{
 			"index": "2",
 		},
-		Fields: map[string]interface{}{
+		Fields: map[string]any{
 			"myfield2": 0,
 			"myfield3": float64(0.0),
 		},
@@ -170,7 +170,7 @@ func TestTableBuild_walk(t *testing.T) {
 		Tags: map[string]string{
 			"index": "3",
 		},
-		Fields: map[string]interface{}{
+		Fields: map[string]any{
 			"myfield3": float64(9.999),
 		},
 	}
@@ -181,7 +181,7 @@ func TestTableBuild_walk(t *testing.T) {
 	require.Contains(t, tb.Rows, rtr4)
 }
 
-func TestTableBuild_noWalk(t *testing.T) {
+func TestTableBuildNoWalkNetsnmp(t *testing.T) {
 	tbl := Table{
 		Name: "mytable",
 		Fields: []Field{
@@ -221,13 +221,13 @@ func TestTableBuild_noWalk(t *testing.T) {
 
 	rtr := RTableRow{
 		Tags:   map[string]string{"myfield1": "baz", "myfield3": "234"},
-		Fields: map[string]interface{}{"myfield2": 234, "myfield4": "testTableEntry.7"},
+		Fields: map[string]any{"myfield2": 234, "myfield4": "testTableEntry.7"},
 	}
 	require.Len(t, tb.Rows, 1)
 	require.Contains(t, tb.Rows, rtr)
 }
 
-func TestSnmpTranslateCache_miss(t *testing.T) {
+func TestSnmpTranslateCacheMiss(t *testing.T) {
 	snmpTranslateCaches = nil
 	oid := "IF-MIB::ifPhysAddress.1"
 	mibName, oidNum, oidText, conversion, err := NewNetsnmpTranslator(testutil.Logger{}).SnmpTranslate(oid)
@@ -241,7 +241,7 @@ func TestSnmpTranslateCache_miss(t *testing.T) {
 	require.Equal(t, err, stc.err)
 }
 
-func TestSnmpTranslateCache_hit(t *testing.T) {
+func TestSnmpTranslateCacheHit(t *testing.T) {
 	snmpTranslateCaches = map[string]snmpTranslateCache{
 		"foo": {
 			mibName:    "a",
@@ -259,7 +259,7 @@ func TestSnmpTranslateCache_hit(t *testing.T) {
 	snmpTranslateCaches = nil
 }
 
-func TestSnmpTableCache_miss(t *testing.T) {
+func TestSnmpTableCacheMiss(t *testing.T) {
 	snmpTableCaches = nil
 	oid := ".1.0.0.0"
 	mibName, oidNum, oidText, fields, err := NewNetsnmpTranslator(testutil.Logger{}).SnmpTable(oid)
@@ -273,7 +273,7 @@ func TestSnmpTableCache_miss(t *testing.T) {
 	require.Equal(t, err, stc.err)
 }
 
-func TestSnmpTableCache_hit(t *testing.T) {
+func TestSnmpTableCacheHit(t *testing.T) {
 	snmpTableCaches = map[string]snmpTableCache{
 		"foo": {
 			mibName: "a",

@@ -2,6 +2,7 @@
 package http_listener_v2
 
 import (
+	"bytes"
 	"compress/gzip"
 	"crypto/subtle"
 	"crypto/tls"
@@ -16,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,7 +28,6 @@ import (
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/config"
 	"github.com/influxdata/telegraf/internal"
-	"github.com/influxdata/telegraf/internal/choice"
 	common_tls "github.com/influxdata/telegraf/plugins/common/tls"
 	"github.com/influxdata/telegraf/plugins/inputs"
 )
@@ -174,16 +175,14 @@ func (h *HTTPListenerV2) Start(acc telegraf.Accumulator) error {
 
 	server := h.createHTTPServer()
 
-	h.wg.Add(1)
-	go func() {
-		defer h.wg.Done()
+	h.wg.Go(func() {
 		if err := server.Serve(h.listener); err != nil {
 			if !errors.Is(err, net.ErrClosed) {
 				h.Log.Errorf("Serve failed: %v", err)
 			}
 			close(h.close)
 		}
-	}()
+	})
 
 	h.Log.Infof("Listening on %s", h.listener.Addr().String())
 
@@ -205,7 +204,7 @@ func (h *HTTPListenerV2) Stop() {
 func (h *HTTPListenerV2) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	handler := h.serveWrite
 
-	if !choice.Contains(req.URL.Path, h.Paths) {
+	if !slices.Contains(h.Paths, req.URL.Path) {
 		handler = http.NotFound
 	}
 
@@ -243,35 +242,28 @@ func (h *HTTPListenerV2) serveWrite(res http.ResponseWriter, req *http.Request) 
 	}
 
 	// Check if the requested HTTP method was specified in config.
-	isAcceptedMethod := false
-	for _, method := range h.Methods {
-		if req.Method == method {
-			isAcceptedMethod = true
-			break
-		}
-	}
-	if !isAcceptedMethod {
+	if !slices.Contains(h.Methods, req.Method) {
 		if err := methodNotAllowed(res); err != nil {
 			h.Log.Debugf("error in method-not-allowed: %v", err)
 		}
 		return
 	}
 
-	var bytes []byte
+	var data []byte
 	var ok bool
 
 	switch strings.ToLower(h.DataSource) {
 	case query:
-		bytes, ok = h.collectQuery(res, req)
+		data, ok = h.collectQuery(res, req)
 	default:
-		bytes, ok = h.collectBody(res, req)
+		data, ok = h.collectBody(res, req)
 	}
 
 	if !ok {
 		return
 	}
 
-	metrics, err := h.Parse(bytes)
+	metrics, err := h.Parse(data)
 	if err != nil {
 		h.Log.Debugf("Parse error: %s", err.Error())
 		if err := badRequest(res); err != nil {
@@ -305,11 +297,26 @@ func (h *HTTPListenerV2) serveWrite(res http.ResponseWriter, req *http.Request) 
 }
 
 func (h *HTTPListenerV2) collectBody(res http.ResponseWriter, req *http.Request) ([]byte, bool) {
-	encoding := req.Header.Get("Content-Encoding")
+	defer req.Body.Close()
 
-	switch encoding {
+	// Limit the body independent of the content-length header as a client
+	// may omit it or send the body chunked.
+	data, err := io.ReadAll(http.MaxBytesReader(res, req.Body, int64(h.MaxBodySize)))
+	if err != nil {
+		h.Log.Debug(err.Error())
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+			if err := tooLarge(res); err != nil {
+				h.Log.Debugf("error in too-large: %v", err)
+			}
+		} else if err := badRequest(res); err != nil {
+			h.Log.Debugf("error in bad-request: %v", err)
+		}
+		return nil, false
+	}
+
+	switch req.Header.Get("Content-Encoding") {
 	case "gzip":
-		r, err := gzip.NewReader(req.Body)
+		r, err := gzip.NewReader(bytes.NewReader(data))
 		if err != nil {
 			h.Log.Debug(err.Error())
 			if err := badRequest(res); err != nil {
@@ -318,18 +325,38 @@ func (h *HTTPListenerV2) collectBody(res http.ResponseWriter, req *http.Request)
 			return nil, false
 		}
 		defer r.Close()
-		maxReader := http.MaxBytesReader(res, r, int64(h.MaxBodySize))
-		bytes, err := io.ReadAll(maxReader)
+		// Limit the decompressed size as well
+		data, err = io.ReadAll(http.MaxBytesReader(res, r, int64(h.MaxBodySize)))
 		if err != nil {
+			h.Log.Debug(err.Error())
+			if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+				if err := tooLarge(res); err != nil {
+					h.Log.Debugf("error in too-large: %v", err)
+				}
+			} else if err := badRequest(res); err != nil {
+				h.Log.Debugf("error in bad-request: %v", err)
+			}
+			return nil, false
+		}
+	case "snappy":
+		// snappy block format is only supported by decode/encode not snappy reader/writer
+		// Decoding allocates the length announced in the header up front, so
+		// check it against the limit before decoding.
+		n, err := snappy.DecodedLen(data)
+		if err != nil {
+			h.Log.Debug(err.Error())
+			if err := badRequest(res); err != nil {
+				h.Log.Debugf("error in bad-request: %v", err)
+			}
+			return nil, false
+		}
+		if int64(n) > int64(h.MaxBodySize) {
 			if err := tooLarge(res); err != nil {
 				h.Log.Debugf("error in too-large: %v", err)
 			}
 			return nil, false
 		}
-		return bytes, true
-	case "snappy":
-		defer req.Body.Close()
-		bytes, err := io.ReadAll(req.Body)
+		data, err = snappy.Decode(nil, data)
 		if err != nil {
 			h.Log.Debug(err.Error())
 			if err := badRequest(res); err != nil {
@@ -337,28 +364,9 @@ func (h *HTTPListenerV2) collectBody(res http.ResponseWriter, req *http.Request)
 			}
 			return nil, false
 		}
-		// snappy block format is only supported by decode/encode not snappy reader/writer
-		bytes, err = snappy.Decode(nil, bytes)
-		if err != nil {
-			h.Log.Debug(err.Error())
-			if err := badRequest(res); err != nil {
-				h.Log.Debugf("error in bad-request: %v", err)
-			}
-			return nil, false
-		}
-		return bytes, true
-	default:
-		defer req.Body.Close()
-		bytes, err := io.ReadAll(req.Body)
-		if err != nil {
-			h.Log.Debug(err.Error())
-			if err := badRequest(res); err != nil {
-				h.Log.Debugf("error in bad-request: %v", err)
-			}
-			return nil, false
-		}
-		return bytes, true
 	}
+
+	return data, true
 }
 
 func (h *HTTPListenerV2) collectQuery(res http.ResponseWriter, req *http.Request) ([]byte, bool) {

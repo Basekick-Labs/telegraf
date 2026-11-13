@@ -2,19 +2,24 @@
 package kafka
 
 import (
+	"bytes"
 	_ "embed"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/gofrs/uuid/v5"
+	"golang.org/x/net/proxy"
 
 	"github.com/influxdata/telegraf"
+	"github.com/influxdata/telegraf/config"
 	"github.com/influxdata/telegraf/internal"
 	"github.com/influxdata/telegraf/plugins/common/kafka"
-	"github.com/influxdata/telegraf/plugins/common/proxy"
+	common_proxy "github.com/influxdata/telegraf/plugins/common/proxy"
 	"github.com/influxdata/telegraf/plugins/outputs"
 )
 
@@ -24,27 +29,24 @@ var sampleConfig string
 var zeroTime = time.Unix(0, 0)
 
 type Kafka struct {
-	Brokers           []string        `toml:"brokers"`
-	Topic             string          `toml:"topic"`
-	TopicTag          string          `toml:"topic_tag"`
-	ExcludeTopicTag   bool            `toml:"exclude_topic_tag"`
-	TopicSuffix       TopicSuffix     `toml:"topic_suffix"`
-	RoutingTag        string          `toml:"routing_tag"`
-	RoutingKey        string          `toml:"routing_key"`
-	ProducerTimestamp string          `toml:"producer_timestamp"`
-	MetricNameHeader  string          `toml:"metric_name_header"`
-	Log               telegraf.Logger `toml:"-"`
-	proxy.Socks5ProxyConfig
+	Brokers           []string          `toml:"brokers"`
+	Topic             string            `toml:"topic"`
+	TopicTag          string            `toml:"topic_tag"`
+	ExcludeTopicTag   bool              `toml:"exclude_topic_tag"`
+	TopicSuffix       TopicSuffix       `toml:"topic_suffix"`
+	RoutingTag        string            `toml:"routing_tag"`
+	RoutingKey        string            `toml:"routing_key"`
+	ProducerTimestamp string            `toml:"producer_timestamp"`
+	MetricNameHeader  string            `toml:"metric_name_header" deprecated:"1.39.0;1.45.0;please use 'headers' instead"`
+	Headers           map[string]string `toml:"headers"`
+	Log               telegraf.Logger   `toml:"-"`
+	common_proxy.Socks5ProxyConfig
 	kafka.WriteConfig
-
-	// Legacy TLS config options
-	Certificate string `toml:"certificate" deprecated:"1.36.0;1.40.0;please use 'tls_cert' instead"`
-	Key         string `toml:"key" deprecated:"1.36.0;1.40.0;please use 'tls_cert' instead"`
-	CA          string `toml:"ca" deprecated:"1.36.0;1.40.0;please use 'tls_ca' instead"`
 
 	saramaConfig *sarama.Config
 	producerFunc func(addrs []string, config *sarama.Config) (sarama.SyncProducer, error)
 	producer     sarama.SyncProducer
+	headerTmpl   map[string]*template.Template
 
 	serializer telegraf.Serializer
 }
@@ -74,28 +76,30 @@ func (k *Kafka) Init() error {
 		return fmt.Errorf("unknown topic suffix method provided: %s", k.TopicSuffix.Method)
 	}
 
-	config := sarama.NewConfig()
-	if err := k.SetConfig(config, k.Log); err != nil {
+	// Legacy support for metric_name_header
+	if k.MetricNameHeader != "" {
+		if k.Headers == nil {
+			k.Headers = make(map[string]string, 1)
+		}
+		k.Headers[k.MetricNameHeader] = "{{ .Name }}"
+	}
+
+	// Create new configuration
+	cfg := sarama.NewConfig()
+	if err := k.SetConfig(cfg, k.Log); err != nil {
 		return err
 	}
 
-	// Legacy support ssl config
-	if k.Certificate != "" {
-		k.TLSCert = k.Certificate
-		k.TLSCA = k.CA
-		k.TLSKey = k.Key
-	}
-
 	if k.Socks5ProxyEnabled {
-		config.Net.Proxy.Enable = true
+		cfg.Net.Proxy.Enable = true
 
-		dialer, err := k.Socks5ProxyConfig.GetDialer()
+		dialer, err := k.Socks5ProxyConfig.GetDialer(proxy.Direct)
 		if err != nil {
 			return fmt.Errorf("connecting to proxy server failed: %w", err)
 		}
-		config.Net.Proxy.Dialer = dialer
+		cfg.Net.Proxy.Dialer = dialer
 	}
-	k.saramaConfig = config
+	k.saramaConfig = cfg
 
 	switch k.ProducerTimestamp {
 	case "":
@@ -103,6 +107,16 @@ func (k *Kafka) Init() error {
 	case "metric", "now":
 	default:
 		return fmt.Errorf("unknown producer_timestamp option: %s", k.ProducerTimestamp)
+	}
+
+	// Setup header templates
+	k.headerTmpl = make(map[string]*template.Template, len(k.Headers))
+	for name, expr := range k.Headers {
+		tmpl, err := template.New(name).Parse(expr)
+		if err != nil {
+			return fmt.Errorf("creating template for header %q failed: %w", name, err)
+		}
+		k.headerTmpl[name] = tmpl
 	}
 
 	return nil
@@ -125,28 +139,43 @@ func (k *Kafka) Close() error {
 }
 
 func (k *Kafka) Write(metrics []telegraf.Metric) error {
+	var writeErr internal.PartialWriteError
 	msgs := make([]*sarama.ProducerMessage, 0, len(metrics))
-	for _, metric := range metrics {
+	for i, metric := range metrics {
 		metric, topic := k.getTopicName(metric)
 
 		buf, err := k.serializer.Serialize(metric)
 		if err != nil {
 			k.Log.Debugf("Could not serialize metric: %v", err)
+			// Reject only this metric, including when sending the remaining
+			// messages fails, so it cannot keep re-entering the buffer.
+			writeErr.Err = internal.ErrSerialization
+			writeErr.MetricsReject = append(writeErr.MetricsReject, i)
+			writeErr.MetricsRejectErrors = append(writeErr.MetricsRejectErrors, err)
 			continue
 		}
 
+		// PartialWriteError uses batch indices, not positions in msgs: a
+		// serialization failure can leave gaps between submitted messages.
 		m := &sarama.ProducerMessage{
-			Topic: topic,
-			Value: sarama.ByteEncoder(buf),
+			Topic:    topic,
+			Value:    sarama.ByteEncoder(buf),
+			Headers:  make([]sarama.RecordHeader, 0, len(k.headerTmpl)),
+			Metadata: i,
 		}
 
-		if k.MetricNameHeader != "" {
-			m.Headers = []sarama.RecordHeader{
-				{
-					Key:   []byte(k.MetricNameHeader),
-					Value: []byte(metric.Name()),
-				},
+		// Set the message headers
+		var headerValue bytes.Buffer
+		for name, tmpl := range k.headerTmpl {
+			headerValue.Reset()
+			if err := tmpl.Execute(&headerValue, metric); err != nil {
+				k.Log.Errorf("adding header %q failed: %v", name, err)
+				continue
 			}
+			m.Headers = append(m.Headers, sarama.RecordHeader{
+				Key:   []byte(name),
+				Value: slices.Clone(headerValue.Bytes()),
+			})
 		}
 
 		// Negative timestamps are not allowed by the Kafka protocol.
@@ -154,40 +183,72 @@ func (k *Kafka) Write(metrics []telegraf.Metric) error {
 			m.Timestamp = metric.Time()
 		}
 
+		// Add the routing key if configured
 		key, err := k.routingKey(metric)
 		if err != nil {
 			return fmt.Errorf("could not generate routing key: %w", err)
 		}
-
 		if key != "" {
 			m.Key = sarama.StringEncoder(key)
 		}
+
 		msgs = append(msgs, m)
 	}
 
-	if err := k.producer.SendMessages(msgs); err != nil {
-		// We could have many errors, return only the first encountered.
-		var errs sarama.ProducerErrors
-		if errors.As(err, &errs) && len(errs) > 0 {
-			// Just return the first error encountered
-			firstErr := errs[0]
-			if errors.Is(firstErr.Err, sarama.ErrMessageSizeTooLarge) {
-				k.Log.Error("Message too large, consider increasing `max_message_bytes`; dropping batch")
-				return nil
-			}
-			if errors.Is(firstErr.Err, sarama.ErrInvalidTimestamp) {
-				k.Log.Error(
-					"The timestamp of the message is out of acceptable range, consider increasing broker `message.timestamp.difference.max.ms`; " +
-						"dropping batch",
-				)
-				return nil
-			}
-			return firstErr
+	if len(msgs) == 0 {
+		if writeErr.Err != nil {
+			return &writeErr
 		}
-		return err
+		return nil
 	}
 
-	return nil
+	err := k.producer.SendMessages(msgs)
+	if err == nil && writeErr.Err == nil {
+		return nil
+	}
+
+	// Sarama reports only failed messages. Acknowledge the others so that
+	// one unavailable topic does not cause successful deliveries to be retried.
+	var failures map[*sarama.ProducerMessage]error
+	if err != nil {
+		writeErr.Err = err
+		var errs sarama.ProducerErrors
+		if !errors.As(err, &errs) || len(errs) == 0 {
+			// Without per-message results no delivery can be acknowledged.
+			return &writeErr
+		}
+		writeErr.Err = errs[0]
+		failures = make(map[*sarama.ProducerMessage]error, len(errs))
+		for _, failure := range errs {
+			failures[failure.Msg] = failure.Err
+		}
+	}
+
+	for _, msg := range msgs {
+		index := msg.Metadata.(int)
+		failure, failed := failures[msg]
+		if !failed {
+			writeErr.MetricsAccept = append(writeErr.MetricsAccept, index)
+			continue
+		}
+		var configErr sarama.ConfigurationError
+		switch {
+		case errors.As(failure, &configErr):
+			// Per-message configuration errors are permanent: Sarama rejects
+			// oversized messages and headers unsupported by the broker version.
+			k.Log.Errorf("Invalid message configuration: %v; dropping metric", configErr)
+		case errors.Is(failure, sarama.ErrMessageSizeTooLarge):
+			k.Log.Error("Message too large, consider increasing `max_message_bytes`; dropping metric")
+		case errors.Is(failure, sarama.ErrInvalidTimestamp):
+			k.Log.Error("Message timestamp out of range, check broker `message.timestamp.difference.max.ms`; dropping metric")
+		default:
+			// Indices absent from both lists stay buffered for the next flush.
+			continue
+		}
+		writeErr.MetricsReject = append(writeErr.MetricsReject, index)
+		writeErr.MetricsRejectErrors = append(writeErr.MetricsRejectErrors, failure)
+	}
+	return &writeErr
 }
 
 func (k *Kafka) getTopicName(metric telegraf.Metric) (telegraf.Metric, string) {
@@ -247,11 +308,13 @@ func (k *Kafka) routingKey(metric telegraf.Metric) (string, error) {
 func init() {
 	outputs.Add("kafka", func() telegraf.Output {
 		return &Kafka{
-			WriteConfig: kafka.WriteConfig{
-				MaxRetry:     3,
-				RequiredAcks: -1,
-			},
-			producerFunc: sarama.NewSyncProducer,
+			MaxRetry:        3,
+			RequiredAcks:    -1,
+			NetDialTimeout:  config.Duration(30 * time.Second),
+			NetReadTimeout:  config.Duration(30 * time.Second),
+			NetWriteTimeout: config.Duration(30 * time.Second),
+			ProducerTimeout: config.Duration(10 * time.Second),
+			producerFunc:    sarama.NewSyncProducer,
 		}
 	})
 }

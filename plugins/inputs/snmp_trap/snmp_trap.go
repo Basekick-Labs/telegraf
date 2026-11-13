@@ -2,6 +2,7 @@
 package snmp_trap
 
 import (
+	"crypto/rand"
 	_ "embed"
 	"encoding/hex"
 	"errors"
@@ -39,6 +40,7 @@ type SnmpTrap struct {
 	AuthPassword config.Secret `toml:"auth_password"`
 	PrivProtocol string        `toml:"priv_protocol"`
 	PrivPassword config.Secret `toml:"priv_password"`
+	EngineID     string        `toml:"engine_id"`
 
 	Translator string          `toml:"-"`
 	Log        telegraf.Logger `toml:"-"`
@@ -186,6 +188,12 @@ func (s *SnmpTrap) Init() error {
 		security.PrivacyPassphrase = privPasswdSecret.String()
 		privPasswdSecret.Destroy()
 
+		// Set local engine ID, required for receiving SNMPv3 informs
+		security.AuthoritativeEngineID, err = s.localEngineID()
+		if err != nil {
+			return err
+		}
+
 		// Enable security settings
 		params.SecurityParameters = &security
 	default:
@@ -198,6 +206,25 @@ func (s *SnmpTrap) Init() error {
 	s.listener.Params = &params
 
 	return nil
+}
+
+func (s *SnmpTrap) localEngineID() (string, error) {
+	if s.EngineID == "" {
+		// RFC 3411 format: enterprise 0, administratively assigned octets
+		id := make([]byte, 13)
+		copy(id, []byte{0x80, 0x00, 0x00, 0x00, 0x05})
+		rand.Read(id[5:])
+		return string(id), nil
+	}
+
+	id, err := hex.DecodeString(strings.TrimPrefix(strings.ToLower(s.EngineID), "0x"))
+	if err != nil {
+		return "", fmt.Errorf("decoding engine_id failed: %w", err)
+	}
+	if len(id) < 5 || len(id) > 32 {
+		return "", fmt.Errorf("engine_id must be 5 to 32 bytes long, got %d", len(id))
+	}
+	return string(id), nil
 }
 
 func (s *SnmpTrap) Start(acc telegraf.Accumulator) error {
@@ -245,7 +272,7 @@ func setTrapOid(tags map[string]string, oid string, e snmp.MibEntry) {
 
 func (s *SnmpTrap) handler(packet *gosnmp.SnmpPacket, addr *net.UDPAddr) {
 	tm := time.Now()
-	fields := make(map[string]interface{}, len(packet.Variables)+1)
+	fields := make(map[string]any, len(packet.Variables)+1)
 	tags := map[string]string{
 		"version": packet.Version.String(),
 		"source":  addr.IP.String(),
@@ -289,7 +316,7 @@ func (s *SnmpTrap) handler(packet *gosnmp.SnmpPacket, addr *net.UDPAddr) {
 	}
 
 	for _, v := range packet.Variables {
-		var value interface{}
+		var value any
 
 		// Use system mibs to resolve oids. Don't fall back to numeric oid
 		// because it's not useful enough to the end user and can be difficult

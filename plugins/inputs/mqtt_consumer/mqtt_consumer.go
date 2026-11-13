@@ -28,6 +28,7 @@ var (
 	once sync.Once
 	// 30 Seconds is the default used by paho.mqtt.golang
 	defaultConnectionTimeout      = config.Duration(30 * time.Second)
+	defaultMaxReconnectInterval   = config.Duration(30 * time.Second)
 	defaultMaxUndeliveredMessages = 1000
 )
 
@@ -40,9 +41,11 @@ type MQTTConsumer struct {
 	Password               config.Secret        `toml:"password"`
 	QoS                    int                  `toml:"qos"`
 	ConnectionTimeout      config.Duration      `toml:"connection_timeout"`
+	MaxReconnectInterval   config.Duration      `toml:"max_reconnect_interval"`
 	KeepAliveInterval      config.Duration      `toml:"keepalive"`
 	PingTimeout            config.Duration      `toml:"ping_timeout"`
 	MaxUndeliveredMessages int                  `toml:"max_undelivered_messages"`
+	OmitRetained           bool                 `toml:"omit_retained"`
 	PersistentSession      bool                 `toml:"persistent_session"`
 	ClientTrace            bool                 `toml:"client_trace"`
 	ClientID               string               `toml:"client_id"`
@@ -134,9 +137,7 @@ func (m *MQTTConsumer) Start(acc telegraf.Accumulator) error {
 	m.sem = make(semaphore, m.MaxUndeliveredMessages)
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
+	m.wg.Go(func() {
 		for {
 			select {
 			case <-m.ctx.Done():
@@ -145,7 +146,7 @@ func (m *MQTTConsumer) Start(acc telegraf.Accumulator) error {
 				m.onDelivered(track)
 			}
 		}
-	}()
+	})
 
 	if err := m.connect(); err != nil {
 		m.Stop()
@@ -235,6 +236,14 @@ func (m *MQTTConsumer) onDelivered(track telegraf.DeliveryInfo) {
 
 func (m *MQTTConsumer) onMessage(_ mqtt.Client, msg mqtt.Message) {
 	m.sem <- empty{}
+
+	if msg.Retained() && m.OmitRetained {
+		if m.PersistentSession {
+			msg.Ack()
+		}
+		<-m.sem
+		return
+	}
 
 	payloadBytes := len(msg.Payload())
 	m.payloadSize.Incr(int64(payloadBytes))
@@ -329,6 +338,7 @@ func (m *MQTTConsumer) createOpts() (*mqtt.ClientOptions, error) {
 		opts.AddBroker(server)
 	}
 	opts.SetAutoReconnect(true)
+	opts.SetMaxReconnectInterval(time.Duration(m.MaxReconnectInterval))
 	opts.SetKeepAlive(time.Duration(m.KeepAliveInterval))
 	opts.SetPingTimeout(time.Duration(m.PingTimeout))
 	opts.SetCleanSession(!m.PersistentSession)
@@ -343,6 +353,7 @@ func newMQTTConsumer(factory clientFactory) *MQTTConsumer {
 		Servers:                []string{"tcp://127.0.0.1:1883"},
 		MaxUndeliveredMessages: defaultMaxUndeliveredMessages,
 		ConnectionTimeout:      defaultConnectionTimeout,
+		MaxReconnectInterval:   defaultMaxReconnectInterval,
 		KeepAliveInterval:      config.Duration(60 * time.Second),
 		PingTimeout:            config.Duration(10 * time.Second),
 		clientFactory:          factory,

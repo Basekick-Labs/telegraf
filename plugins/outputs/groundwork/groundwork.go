@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -25,6 +26,7 @@ import (
 var sampleConfig string
 
 type metricMeta struct {
+	alias    string
 	group    string
 	resource string
 }
@@ -39,6 +41,8 @@ type Groundwork struct {
 	DefaultServiceState string          `toml:"default_service_state"`
 	GroupTag            string          `toml:"group_tag"`
 	ResourceTag         string          `toml:"resource_tag"`
+	AliasTag            string          `toml:"alias_tag"`
+	ServiceTag          string          `toml:"service_tag"`
 	Log                 telegraf.Logger `toml:"-"`
 	client              clients.GWClient
 }
@@ -120,10 +124,14 @@ func (g *Groundwork) Close() error {
 func (g *Groundwork) Write(metrics []telegraf.Metric) error {
 	groupMap := make(map[string][]transit.ResourceRef)
 	resourceToServicesMap := make(map[string][]transit.MonitoredService)
+	resourceToAliasMap := make(map[string]string)
 	for _, metric := range metrics {
 		meta, service := g.parseMetric(metric)
 		resource := meta.resource
 		resourceToServicesMap[resource] = append(resourceToServicesMap[resource], *service)
+		if meta.alias != "" {
+			resourceToAliasMap[resource] = meta.alias
+		}
 
 		group := meta.group
 		if len(group) != 0 {
@@ -151,19 +159,17 @@ func (g *Groundwork) Write(metrics []telegraf.Metric) error {
 
 	resources := make([]transit.MonitoredResource, 0, len(resourceToServicesMap))
 	for resourceName, services := range resourceToServicesMap {
-		resources = append(resources, transit.MonitoredResource{
-			BaseResource: transit.BaseResource{
-				BaseInfo: transit.BaseInfo{
-					Name: resourceName,
-					Type: transit.ResourceTypeHost,
-				},
-			},
-			MonitoredInfo: transit.MonitoredInfo{
-				Status:        transit.HostUp,
-				LastCheckTime: transit.NewTimestamp(),
-			},
-			Services: services,
-		})
+		res := transit.MonitoredResource{
+			Name:          resourceName,
+			Type:          transit.ResourceTypeHost,
+			Status:        transit.HostUp,
+			LastCheckTime: transit.NewTimestamp(),
+			Services:      services,
+		}
+		if alias, ok := resourceToAliasMap[resourceName]; ok {
+			res.SetProperty("Alias", alias)
+		}
+		resources = append(resources, res)
 	}
 
 	traceToken, err := uuid.GenerateUUID()
@@ -199,6 +205,7 @@ func init() {
 		return &Groundwork{
 			GroupTag:            "group",
 			ResourceTag:         "host",
+			ServiceTag:          "service",
 			DefaultHost:         "telegraf",
 			DefaultAppType:      "TELEGRAF",
 			DefaultServiceState: string(transit.ServiceOk),
@@ -214,8 +221,10 @@ func (g *Groundwork) parseMetric(metric telegraf.Metric) (metricMeta, *transit.M
 		resource = v
 	}
 
+	alias, _ := metric.GetTag(g.AliasTag)
+
 	service := metric.Name()
-	if v, ok := metric.GetTag("service"); ok {
+	if v, ok := metric.GetTag(g.ServiceTag); ok {
 		service = v
 	}
 
@@ -227,12 +236,10 @@ func (g *Groundwork) parseMetric(metric telegraf.Metric) (metricMeta, *transit.M
 	lastCheckTime := transit.NewTimestamp()
 	lastCheckTime.Time = metric.Time()
 	serviceObject := transit.MonitoredService{
-		BaseInfo: transit.BaseInfo{
-			Name:       service,
-			Type:       transit.ResourceTypeService,
-			Owner:      resource,
-			Properties: make(map[string]transit.TypedValue),
-		},
+		Name:       service,
+		Type:       transit.ResourceTypeService,
+		Owner:      resource,
+		Properties: make(map[string]transit.TypedValue),
 		MonitoredInfo: transit.MonitoredInfo{
 			Status:        transit.MonitorStatus(g.DefaultServiceState),
 			LastCheckTime: lastCheckTime,
@@ -248,7 +255,8 @@ func (g *Groundwork) parseMetric(metric telegraf.Metric) (metricMeta, *transit.M
 			t == "warning" ||
 			t == g.GroupTag ||
 			t == g.ResourceTag ||
-			t == "service" ||
+			t == g.AliasTag ||
+			t == g.ServiceTag ||
 			t == "status" ||
 			t == "message" ||
 			t == "unitType" {
@@ -282,7 +290,7 @@ func (g *Groundwork) parseMetric(metric telegraf.Metric) (metricMeta, *transit.M
 		}
 
 		var thresholds []transit.ThresholdValue
-		addCriticalThreshold := func(v interface{}) {
+		addCriticalThreshold := func(v any) {
 			if tv := transit.NewTypedValue(v); tv != nil {
 				thresholds = append(thresholds, transit.ThresholdValue{
 					SampleType: transit.Critical,
@@ -291,7 +299,7 @@ func (g *Groundwork) parseMetric(metric telegraf.Metric) (metricMeta, *transit.M
 				})
 			}
 		}
-		addWarningThreshold := func(v interface{}) {
+		addWarningThreshold := func(v any) {
 			if tv := transit.NewTypedValue(v); tv != nil {
 				thresholds = append(thresholds, transit.ThresholdValue{
 					SampleType: transit.Warning,
@@ -364,6 +372,13 @@ func (g *Groundwork) parseMetric(metric telegraf.Metric) (metricMeta, *transit.M
 				return
 			}
 		}
+		// Without thresholds there is nothing to compute the status from,
+		// so the service keeps default_service_state.
+		if !slices.ContainsFunc(serviceObject.Metrics, func(ts transit.TimeSeries) bool {
+			return len(ts.Thresholds) > 0
+		}) {
+			return
+		}
 		status, err := transit.CalculateServiceStatus(&serviceObject.Metrics)
 		if err != nil {
 			g.Log.Infof("could not calculate service status, reverting to default_service_state: %v", err)
@@ -372,7 +387,7 @@ func (g *Groundwork) parseMetric(metric telegraf.Metric) (metricMeta, *transit.M
 		serviceObject.Status = status
 	}()
 
-	return metricMeta{resource: resource, group: group}, &serviceObject
+	return metricMeta{alias: alias, group: group, resource: resource}, &serviceObject
 }
 
 func validStatus(status string) bool {

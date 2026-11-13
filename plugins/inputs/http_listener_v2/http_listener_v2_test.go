@@ -2,10 +2,13 @@ package http_listener_v2
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/binary"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -229,7 +232,7 @@ func TestWriteHTTP(t *testing.T) {
 
 	acc.Wait(1)
 	acc.AssertContainsTaggedFields(t, "cpu_load_short",
-		map[string]interface{}{"value": float64(12)},
+		map[string]any{"value": float64(12)},
 		map[string]string{"host": "server01"},
 	)
 
@@ -244,7 +247,7 @@ func TestWriteHTTP(t *testing.T) {
 		"server04", "server05", "server06"}
 	for _, hostTag := range hostTags {
 		acc.AssertContainsTaggedFields(t, "cpu_load_short",
-			map[string]interface{}{"value": float64(12)},
+			map[string]any{"value": float64(12)},
 			map[string]string{"host": hostTag},
 		)
 	}
@@ -257,7 +260,7 @@ func TestWriteHTTP(t *testing.T) {
 
 	acc.Wait(3)
 	acc.AssertContainsTaggedFields(t, "cpu_load_short",
-		map[string]interface{}{"value": float64(12)},
+		map[string]any{"value": float64(12)},
 		map[string]string{"host": "server01"},
 	)
 }
@@ -281,7 +284,7 @@ func TestWriteHTTPWithPathTag(t *testing.T) {
 
 	acc.Wait(1)
 	acc.AssertContainsTaggedFields(t, "cpu_load_short",
-		map[string]interface{}{"value": float64(12)},
+		map[string]any{"value": float64(12)},
 		map[string]string{"host": "server01", "http_listener_v2_path": "/write"},
 	)
 }
@@ -329,12 +332,12 @@ func TestWriteHTTPWithMultiplePaths(t *testing.T) {
 
 	acc.Wait(1)
 	acc.AssertContainsTaggedFields(t, "cpu_load_short",
-		map[string]interface{}{"value": float64(12)},
+		map[string]any{"value": float64(12)},
 		map[string]string{"host": "server01", "http_listener_v2_path": "/write"},
 	)
 
 	acc.AssertContainsTaggedFields(t, "cpu_load_short",
-		map[string]interface{}{"value": float64(12)},
+		map[string]any{"value": float64(12)},
 		map[string]string{"host": "server01", "http_listener_v2_path": "/alternative_write"},
 	)
 }
@@ -357,7 +360,7 @@ func TestWriteHTTPNoNewline(t *testing.T) {
 
 	acc.Wait(1)
 	acc.AssertContainsTaggedFields(t, "cpu_load_short",
-		map[string]interface{}{"value": float64(12)},
+		map[string]any{"value": float64(12)},
 		map[string]string{"host": "server01"},
 	)
 }
@@ -414,6 +417,83 @@ func TestWriteHTTPVerySmallMaxBody(t *testing.T) {
 	require.EqualValues(t, 413, resp.StatusCode)
 }
 
+func TestWriteHTTPBodyTooLarge(t *testing.T) {
+	const limit = 4096
+	raw := bytes.Repeat([]byte(testMsg), 2*limit/len(testMsg))
+
+	var gzipped bytes.Buffer
+	w := gzip.NewWriter(&gzipped)
+	_, err := w.Write(raw)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	// Snappy header announcing a decoded length above the limit, kept within
+	// the signed 32-bit range so snappy.DecodedLen accepts it on all platforms.
+	announced := binary.AppendUvarint(nil, math.MaxInt32)
+
+	tests := []struct {
+		name     string
+		encoding string
+		body     []byte
+	}{
+		{
+			name: "plain",
+			body: raw,
+		},
+		{
+			name:     "gzip",
+			encoding: "gzip",
+			body:     gzipped.Bytes(),
+		},
+		{
+			name:     "snappy decoded above limit",
+			encoding: "snappy",
+			body:     snappy.Encode(nil, raw),
+		},
+		{
+			name:     "snappy announced length above limit",
+			encoding: "snappy",
+			body:     announced,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := &influx.Parser{}
+			require.NoError(t, parser.Init())
+
+			listener := &HTTPListenerV2{
+				Log:            testutil.Logger{},
+				ServiceAddress: "localhost:0",
+				Paths:          []string{"/write"},
+				Methods:        []string{"POST"},
+				Parser:         parser,
+				MaxBodySize:    config.Size(limit),
+				timeFunc:       time.Now,
+				close:          make(chan struct{}),
+			}
+
+			acc := &testutil.Accumulator{}
+			require.NoError(t, listener.Init())
+			require.NoError(t, listener.Start(acc))
+			defer listener.Stop()
+
+			req, err := http.NewRequest("POST", createURL(listener, "http", "/write", ""), bytes.NewReader(tt.body))
+			require.NoError(t, err)
+			// Send the body chunked so the content-length check cannot catch it
+			req.ContentLength = -1
+			if tt.encoding != "" {
+				req.Header.Set("Content-Encoding", tt.encoding)
+			}
+
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			require.NoError(t, resp.Body.Close())
+			require.EqualValues(t, 413, resp.StatusCode)
+			require.Zero(t, acc.NMetrics())
+		})
+	}
+}
+
 // test that writing gzipped data works
 func TestWriteHTTPGzippedData(t *testing.T) {
 	listener, err := newTestHTTPListenerV2()
@@ -443,7 +523,7 @@ func TestWriteHTTPGzippedData(t *testing.T) {
 	acc.Wait(len(hostTags))
 	for _, hostTag := range hostTags {
 		acc.AssertContainsTaggedFields(t, "cpu_load_short",
-			map[string]interface{}{"value": float64(12)},
+			map[string]any{"value": float64(12)},
 			map[string]string{"host": hostTag},
 		)
 	}
@@ -480,7 +560,7 @@ func TestWriteHTTPSnappyData(t *testing.T) {
 
 	for _, hostTag := range hostTags {
 		acc.AssertContainsTaggedFields(t, "cpu_load_short",
-			map[string]interface{}{"value": float64(12)},
+			map[string]any{"value": float64(12)},
 			map[string]string{"host": hostTag},
 		)
 	}
@@ -501,11 +581,11 @@ func TestWriteHTTPHighTraffic(t *testing.T) {
 
 	// post many messages to listener
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		wg.Add(1)
 		go func(innerwg *sync.WaitGroup) {
 			defer innerwg.Done()
-			for i := 0; i < 500; i++ {
+			for range 500 {
 				resp, err := http.Post(createURL(listener, "http", "/write", "db=mydb"), "", bytes.NewBufferString(testMsgs))
 				if err != nil {
 					return
@@ -602,7 +682,7 @@ func TestWriteHTTPTransformHeaderValuesToTagsSingleWrite(t *testing.T) {
 
 	acc.Wait(1)
 	acc.AssertContainsTaggedFields(t, "cpu_load_short",
-		map[string]interface{}{"value": float64(12)},
+		map[string]any{"value": float64(12)},
 		map[string]string{"host": "server01", "presentMeasurementKey1": "PRESENT_HTTP_VALUE_1", "presentMeasurementKey2": "PRESENT_HTTP_VALUE_2"},
 	)
 
@@ -614,7 +694,7 @@ func TestWriteHTTPTransformHeaderValuesToTagsSingleWrite(t *testing.T) {
 
 	acc.Wait(1)
 	acc.AssertContainsTaggedFields(t, "cpu_load_short",
-		map[string]interface{}{"value": float64(12)},
+		map[string]any{"value": float64(12)},
 		map[string]string{"host": "server01", "presentMeasurementKey1": "PRESENT_HTTP_VALUE_1", "presentMeasurementKey2": "PRESENT_HTTP_VALUE_2"},
 	)
 }
@@ -648,7 +728,7 @@ func TestWriteHTTPTransformHeaderValuesToTagsBulkWrite(t *testing.T) {
 	hostTags := []string{"server02", "server03", "server04", "server05", "server06"}
 	for _, hostTag := range hostTags {
 		acc.AssertContainsTaggedFields(t, "cpu_load_short",
-			map[string]interface{}{"value": float64(12)},
+			map[string]any{"value": float64(12)},
 			map[string]string{"host": hostTag, "presentMeasurementKey1": "PRESENT_HTTP_VALUE_1", "presentMeasurementKey2": "PRESENT_HTTP_VALUE_2"},
 		)
 	}
@@ -659,6 +739,7 @@ func TestWriteHTTPQueryParams(t *testing.T) {
 		MetricName: "query_measurement",
 		TagKeys:    []string{"tagKey"},
 	}
+	require.NoError(t, parser.Init())
 
 	listener, err := newTestHTTPListenerV2()
 	require.NoError(t, err)
@@ -677,7 +758,7 @@ func TestWriteHTTPQueryParams(t *testing.T) {
 
 	acc.Wait(1)
 	acc.AssertContainsTaggedFields(t, "query_measurement",
-		map[string]interface{}{"fieldKey": float64(42)},
+		map[string]any{"fieldKey": float64(42)},
 		map[string]string{"tagKey": "tagValue"},
 	)
 }
@@ -687,6 +768,7 @@ func TestWriteHTTPFormData(t *testing.T) {
 		MetricName: "query_measurement",
 		TagKeys:    []string{"tagKey"},
 	}
+	require.NoError(t, parser.Init())
 
 	listener, err := newTestHTTPListenerV2()
 	require.NoError(t, err)
@@ -707,7 +789,7 @@ func TestWriteHTTPFormData(t *testing.T) {
 
 	acc.Wait(1)
 	acc.AssertContainsTaggedFields(t, "query_measurement",
-		map[string]interface{}{"fieldKey": float64(42)},
+		map[string]any{"fieldKey": float64(42)},
 		map[string]string{"tagKey": "tagValue"},
 	)
 }

@@ -35,13 +35,11 @@ func newClient(baseURL, namespace, bearerTokenFile string, timeout time.Duration
 		}
 	} else {
 		clientConfig = &rest.Config{
-			TLSClientConfig: rest.TLSClientConfig{
-				ServerName: tlsConfig.ServerName,
-				Insecure:   tlsConfig.InsecureSkipVerify,
-				CAFile:     tlsConfig.TLSCA,
-				CertFile:   tlsConfig.TLSCert,
-				KeyFile:    tlsConfig.TLSKey,
-			},
+			ServerName:    tlsConfig.ServerName,
+			Insecure:      tlsConfig.InsecureSkipVerify,
+			CAFile:        tlsConfig.TLSCA,
+			CertFile:      tlsConfig.TLSCert,
+			KeyFile:       tlsConfig.TLSKey,
 			Host:          baseURL,
 			ContentConfig: rest.ContentConfig{},
 		}
@@ -134,6 +132,12 @@ func (c *client) getPods(ctx context.Context, nodeName string) (*corev1.PodList,
 		fieldSelector = "spec.nodeName=" + nodeName
 	}
 	return c.CoreV1().Pods(c.namespace).List(ctx, metav1.ListOptions{FieldSelector: fieldSelector})
+}
+
+func (c *client) getReplicaSets(ctx context.Context) (*appsv1.ReplicaSetList, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	return c.AppsV1().ReplicaSets(c.namespace).List(ctx, metav1.ListOptions{})
 }
 
 func (c *client) getServices(ctx context.Context) (*corev1.ServiceList, error) {

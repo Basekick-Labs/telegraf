@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/config"
 	"github.com/influxdata/telegraf/internal"
+	"github.com/influxdata/telegraf/plugins/common/sudo"
 	"github.com/influxdata/telegraf/plugins/inputs"
 )
 
@@ -53,8 +55,8 @@ func (s *Unbound) Gather(acc telegraf.Accumulator) error {
 	}
 
 	// Process values
-	fields := make(map[string]interface{})
-	fieldsThreads := make(map[string]map[string]interface{})
+	fields := make(map[string]any)
+	fieldsThreads := make(map[string]map[string]any)
 
 	scanner := bufio.NewScanner(out)
 	for scanner.Scan() {
@@ -89,7 +91,7 @@ func (s *Unbound) Gather(acc telegraf.Accumulator) error {
 					// re-define stat
 					field := strings.Join(threadTokens[:], "_")
 					if fieldsThreads[threadID] == nil {
-						fieldsThreads[threadID] = make(map[string]interface{})
+						fieldsThreads[threadID] = make(map[string]any)
 					}
 					fieldsThreads[threadID][field] = fieldValue
 				}
@@ -159,7 +161,11 @@ func unboundRunner(unbound Unbound) (*bytes.Buffer, error) {
 
 	if unbound.UseSudo {
 		cmdArgs = append([]string{unbound.Binary}, cmdArgs...)
-		cmd = exec.Command("sudo", cmdArgs...)
+		// OpenBSD doas rules run unbound-control as _unbound. doas targets root unless -u is set.
+		if runtime.GOOS == "openbsd" {
+			cmdArgs = append([]string{"-u", "_unbound"}, cmdArgs...)
+		}
+		cmd = exec.Command(sudo.Binary(), cmdArgs...)
 	}
 
 	var out bytes.Buffer

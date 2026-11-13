@@ -8,7 +8,6 @@ import (
 	"time"
 
 	dto "github.com/prometheus/client_model/go"
-	"google.golang.org/protobuf/proto"
 
 	"github.com/influxdata/telegraf"
 )
@@ -20,7 +19,7 @@ type metricFamily struct {
 	typ  telegraf.ValueType
 }
 
-type metric struct {
+type promMetric struct {
 	labels    []labelPair
 	time      time.Time
 	addTime   time.Time
@@ -48,10 +47,13 @@ type quantile struct {
 	value    float64
 }
 
+// histogram collects the parts of a classic histogram. The count and sum
+// are nil until a metric carrying them was added, as a batch may contain the
+// buckets only.
 type histogram struct {
 	buckets []bucket
-	count   uint64
-	sum     float64
+	count   *uint64
+	sum     *float64
 }
 
 func (h *histogram) merge(b bucket) {
@@ -64,10 +66,12 @@ func (h *histogram) merge(b bucket) {
 	h.buckets = append(h.buckets, b)
 }
 
+// summary collects the parts of a summary. The count and sum are nil until a
+// metric carrying them was added, as a batch may contain the quantiles only.
 type summary struct {
 	quantiles []quantile
-	count     uint64
-	sum       float64
+	count     *uint64
+	sum       *float64
 }
 
 func (s *summary) merge(q quantile) {
@@ -95,7 +99,7 @@ func makeMetricKey(labels []labelPair) metricKey {
 
 type entry struct {
 	family  metricFamily
-	metrics map[metricKey]*metric
+	metrics map[metricKey]*promMetric
 }
 
 // Collection is a cache of metrics that are being processed.
@@ -208,7 +212,7 @@ func (c *Collection) Add(m telegraf.Metric, now time.Time) {
 		if !ok {
 			singleEntry = entry{
 				family:  family,
-				metrics: make(map[metricKey]*metric),
+				metrics: make(map[metricKey]*promMetric),
 			}
 			c.entries[family] = singleEntry
 		}
@@ -236,7 +240,7 @@ func (c *Collection) Add(m telegraf.Metric, now time.Time) {
 				continue
 			}
 
-			existingMetric = &metric{
+			existingMetric = &promMetric{
 				labels:  labels,
 				time:    m.Time(),
 				addTime: now,
@@ -246,7 +250,7 @@ func (c *Collection) Add(m telegraf.Metric, now time.Time) {
 			singleEntry.metrics[metricKey] = existingMetric
 		case telegraf.Histogram:
 			if existingMetric == nil {
-				existingMetric = &metric{
+				existingMetric = &promMetric{
 					labels:    labels,
 					time:      m.Time(),
 					addTime:   now,
@@ -282,14 +286,14 @@ func (c *Collection) Add(m telegraf.Metric, now time.Time) {
 					continue
 				}
 
-				existingMetric.histogram.sum = sum
+				existingMetric.histogram.sum = &sum
 			case strings.HasSuffix(field.Key, "_count"):
 				count, ok := SampleCount(field.Value)
 				if !ok {
 					continue
 				}
 
-				existingMetric.histogram.count = count
+				existingMetric.histogram.count = &count
 			default:
 				continue
 			}
@@ -297,7 +301,7 @@ func (c *Collection) Add(m telegraf.Metric, now time.Time) {
 			singleEntry.metrics[metricKey] = existingMetric
 		case telegraf.Summary:
 			if existingMetric == nil {
-				existingMetric = &metric{
+				existingMetric = &promMetric{
 					labels:  labels,
 					time:    m.Time(),
 					addTime: now,
@@ -314,14 +318,14 @@ func (c *Collection) Add(m telegraf.Metric, now time.Time) {
 					continue
 				}
 
-				existingMetric.summary.sum = sum
+				existingMetric.summary.sum = &sum
 			case strings.HasSuffix(field.Key, "_count"):
 				count, ok := SampleCount(field.Value)
 				if !ok {
 					continue
 				}
 
-				existingMetric.summary.count = count
+				existingMetric.summary.count = &count
 			default:
 				quantileTag, ok := m.GetTag("quantile")
 				if !ok {
@@ -385,8 +389,8 @@ func (c *Collection) GetEntries() []entry {
 }
 
 // GetMetrics returns a slice of all metrics in the entry.
-func (c *Collection) GetMetrics(entry entry) []*metric {
-	metrics := make([]*metric, 0, len(entry.metrics))
+func (c *Collection) GetMetrics(entry entry) []*promMetric {
+	metrics := make([]*promMetric, 0, len(entry.metrics))
 	for _, metric := range entry.metrics {
 		metrics = append(metrics, metric)
 	}
@@ -425,20 +429,20 @@ func (c *Collection) GetProto() []*dto.MetricFamily {
 
 	for _, entry := range c.GetEntries() {
 		mf := &dto.MetricFamily{
-			Name: proto.String(entry.family.name),
+			Name: new(entry.family.name),
 			Type: metricType(entry.family.typ),
 		}
 
 		if !c.config.CompactEncoding {
-			mf.Help = proto.String(helpString)
+			mf.Help = new(helpString)
 		}
 
 		for _, metric := range c.GetMetrics(entry) {
 			l := make([]*dto.LabelPair, 0, len(metric.labels))
 			for _, label := range metric.labels {
 				l = append(l, &dto.LabelPair{
-					Name:  proto.String(label.name),
-					Value: proto.String(label.value),
+					Name:  new(label.name),
+					Value: new(label.value),
 				})
 			}
 
@@ -447,43 +451,52 @@ func (c *Collection) GetProto() []*dto.MetricFamily {
 			}
 
 			if c.config.ExportTimestamp {
-				m.TimestampMs = proto.Int64(metric.time.UnixNano() / int64(time.Millisecond))
+				m.TimestampMs = new(metric.time.UnixNano() / int64(time.Millisecond))
 			}
 
 			switch entry.family.typ {
 			case telegraf.Gauge:
-				m.Gauge = &dto.Gauge{Value: proto.Float64(metric.scaler.value)}
+				m.Gauge = &dto.Gauge{Value: new(metric.scaler.value)}
 			case telegraf.Counter:
-				m.Counter = &dto.Counter{Value: proto.Float64(metric.scaler.value)}
+				m.Counter = &dto.Counter{Value: new(metric.scaler.value)}
 			case telegraf.Untyped:
-				m.Untyped = &dto.Untyped{Value: proto.Float64(metric.scaler.value)}
+				m.Untyped = &dto.Untyped{Value: new(metric.scaler.value)}
 			case telegraf.Histogram:
+				// The exposition format always carries the count and the
+				// sum, so a histogram without them cannot be exported
+				// without inventing values.
+				if metric.histogram.count == nil || metric.histogram.sum == nil {
+					continue
+				}
 				buckets := make([]*dto.Bucket, 0, len(metric.histogram.buckets))
 				for _, bucket := range metric.histogram.buckets {
 					buckets = append(buckets, &dto.Bucket{
-						UpperBound:      proto.Float64(bucket.bound),
-						CumulativeCount: proto.Uint64(bucket.count),
+						UpperBound:      new(bucket.bound),
+						CumulativeCount: new(bucket.count),
 					})
 				}
 
 				m.Histogram = &dto.Histogram{
 					Bucket:      buckets,
-					SampleCount: proto.Uint64(metric.histogram.count),
-					SampleSum:   proto.Float64(metric.histogram.sum),
+					SampleCount: metric.histogram.count,
+					SampleSum:   metric.histogram.sum,
 				}
 			case telegraf.Summary:
+				if metric.summary.count == nil || metric.summary.sum == nil {
+					continue
+				}
 				quantiles := make([]*dto.Quantile, 0, len(metric.summary.quantiles))
 				for _, quantile := range metric.summary.quantiles {
 					quantiles = append(quantiles, &dto.Quantile{
-						Quantile: proto.Float64(quantile.quantile),
-						Value:    proto.Float64(quantile.value),
+						Quantile: new(quantile.quantile),
+						Value:    new(quantile.value),
 					})
 				}
 
 				m.Summary = &dto.Summary{
 					Quantile:    quantiles,
-					SampleCount: proto.Uint64(metric.summary.count),
-					SampleSum:   proto.Float64(metric.summary.sum),
+					SampleCount: metric.summary.count,
+					SampleSum:   metric.summary.sum,
 				}
 			default:
 				panic("unknown telegraf.ValueType")

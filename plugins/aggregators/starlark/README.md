@@ -10,7 +10,7 @@ unmodified.
 
 > [!NOTE]
 > The execution environment is sandboxed, and it is not possible to access the
-> local filesystem or perfoming network operations. This is by design of the
+> local filesystem or performing network operations. This is by design of the
 > Starlark language as a configuration language.
 
 The Starlark script used by this plugin needs to be composed of the three
@@ -110,21 +110,31 @@ the [Starlark specification][spec].
 
 ## Python Differences
 
-Refer to the section [Python
-Differences](../../processors/starlark/README.md#python-differences) of the
-documentation about the Starlark processor.
+Refer to the section [Python Differences][processor_pydiff] of the documentation
+about the Starlark processor.
+
+[processor_pydiff]: /plugins/processors/starlark/README.md#python-differences
 
 ## Libraries available
 
-Refer to the section [Libraries
-available](../../processors/starlark/README.md#libraries-available) of the
-documentation about the Starlark processor.
+Refer to the section [Libraries available][processor_libs] of the documentation
+about the Starlark processor.
+
+[processor_libs]: /plugins/processors/starlark/README.md#libraries-available
+
+### State persistence
+
+Refer to the section [State persistence][processor_state] of the documentation
+about the Starlark processor.
+
+[processor_state]: /plugins/processors/starlark/README.md#state-persistence
 
 ## Common Questions
 
-Refer to the section [Common
-Questions](../../processors/starlark/README.md#common-questions) of the
-documentation about the Starlark processor.
+Refer to the section [Common Questions][processor_faq] of the documentation
+about the Starlark processor.
+
+[processor_faq]: /plugins/processors/starlark/README.md#common-questions
 
 ## Examples
 

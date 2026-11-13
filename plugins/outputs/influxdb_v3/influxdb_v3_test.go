@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go/wait"
 
@@ -21,9 +20,6 @@ import (
 	"github.com/influxdata/telegraf/config"
 	"github.com/influxdata/telegraf/internal"
 	"github.com/influxdata/telegraf/metric"
-	httpconfig "github.com/influxdata/telegraf/plugins/common/http"
-	"github.com/influxdata/telegraf/plugins/common/proxy"
-	"github.com/influxdata/telegraf/plugins/common/ratelimiter"
 	"github.com/influxdata/telegraf/plugins/outputs"
 	"github.com/influxdata/telegraf/testutil"
 )
@@ -31,6 +27,24 @@ import (
 func TestSampleConfig(t *testing.T) {
 	plugin := InfluxDB{}
 	require.NotEmpty(t, plugin.SampleConfig())
+}
+
+func TestTimeoutTOMLParsing(t *testing.T) {
+	c := config.NewConfig()
+	cfg := []byte(`
+[[outputs.influxdb_v3]]
+  urls = ["http://localhost:8181"]
+  database = "test"
+  timeout = "120s"
+  response_timeout = "33s"
+`)
+	require.NoError(t, c.LoadConfigData(cfg, config.EmptySourcePath))
+	require.Len(t, c.Outputs, 1)
+
+	plugin, ok := c.Outputs[0].Output.(*InfluxDB)
+	require.True(t, ok)
+	require.Equal(t, config.Duration(120*time.Second), plugin.HTTPClientConfig.Timeout)
+	require.Equal(t, config.Duration(33*time.Second), plugin.HTTPClientConfig.ResponseHeaderTimeout)
 }
 
 func TestPluginRegistered(t *testing.T) {
@@ -79,16 +93,8 @@ func TestURLFail(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			plugin := &InfluxDB{
-				URLs: []string{tt.url},
-				clientConfig: clientConfig{
-					HTTPClientConfig: httpconfig.HTTPClientConfig{
-						TransportConfig: httpconfig.TransportConfig{
-							HTTPProxy: proxy.HTTPProxy{
-								HTTPProxyURL: tt.proxy,
-							},
-						},
-					},
-				},
+				URLs:         []string{tt.url},
+				HTTPProxyURL: tt.proxy,
 			}
 			require.ErrorContains(t, plugin.Init(), tt.expected)
 		})
@@ -97,16 +103,8 @@ func TestURLFail(t *testing.T) {
 
 func TestURLSuccess(t *testing.T) {
 	plugin := &InfluxDB{
-		URLs: []string{"http://localhost:1234"},
-		clientConfig: clientConfig{
-			HTTPClientConfig: httpconfig.HTTPClientConfig{
-				TransportConfig: httpconfig.TransportConfig{
-					HTTPProxy: proxy.HTTPProxy{
-						HTTPProxyURL: "http://localhost:3128",
-					},
-				},
-			},
-		},
+		URLs:         []string{"http://localhost:1234"},
+		HTTPProxyURL: "http://localhost:3128",
 	}
 	require.NoError(t, plugin.Init())
 	require.NoError(t, plugin.Connect())
@@ -119,13 +117,7 @@ func TestInfluxDBLocalAddress(t *testing.T) {
 	defer server.Close()
 
 	output := InfluxDB{
-		clientConfig: clientConfig{
-			HTTPClientConfig: httpconfig.HTTPClientConfig{
-				TransportConfig: httpconfig.TransportConfig{
-					LocalAddress: "localhost",
-				},
-			},
-		},
+		LocalAddress: "localhost",
 	}
 	require.NoError(t, output.Connect())
 	require.NoError(t, output.Close())
@@ -172,14 +164,12 @@ func TestWrite(t *testing.T) {
 
 	// Setup plugin and connect
 	plugin := &InfluxDB{
-		URLs: []string{"http://" + ts.Listener.Addr().String()},
-		clientConfig: clientConfig{
-			Database:           "telegraf",
-			DatabaseTag:        "database",
-			ExcludeDatabaseTag: true,
-			ContentEncoding:    "identity",
-		},
-		Log: &testutil.Logger{},
+		URLs:               []string{"http://" + ts.Listener.Addr().String()},
+		Database:           "telegraf",
+		DatabaseTag:        "database",
+		ExcludeDatabaseTag: true,
+		ContentEncoding:    "identity",
+		Log:                &testutil.Logger{},
 	}
 	require.NoError(t, plugin.Init())
 	require.NoError(t, plugin.Connect())
@@ -187,12 +177,12 @@ func TestWrite(t *testing.T) {
 
 	// Test writing
 	metrics := []telegraf.Metric{
-		testutil.MustMetric(
+		metric.New(
 			"cpu",
 			map[string]string{
 				"database": "foobar",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"value": 42.123,
 			},
 			time.Unix(0, 0),
@@ -224,11 +214,9 @@ func TestWriteDefaultSync(t *testing.T) {
 
 	// Setup plugin and connect
 	plugin := &InfluxDB{
-		URLs: []string{"http://" + ts.Listener.Addr().String()},
-		clientConfig: clientConfig{
-			Database: "telegraf",
-		},
-		Log: &testutil.Logger{},
+		URLs:     []string{"http://" + ts.Listener.Addr().String()},
+		Database: "telegraf",
+		Log:      &testutil.Logger{},
 	}
 	require.NoError(t, plugin.Init())
 	require.NoError(t, plugin.Connect())
@@ -236,12 +224,12 @@ func TestWriteDefaultSync(t *testing.T) {
 
 	// Test writing
 	metrics := []telegraf.Metric{
-		testutil.MustMetric(
+		metric.New(
 			"cpu",
 			map[string]string{
 				"database": "foobar",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"value": 42.123,
 			},
 			time.Unix(0, 0),
@@ -273,12 +261,10 @@ func TestWriteExplicitSync(t *testing.T) {
 	// Setup plugin and connect
 	sync := true
 	plugin := &InfluxDB{
-		URLs: []string{"http://" + ts.Listener.Addr().String()},
-		clientConfig: clientConfig{
-			Database: "telegraf",
-			Sync:     &sync,
-		},
-		Log: &testutil.Logger{},
+		URLs:     []string{"http://" + ts.Listener.Addr().String()},
+		Database: "telegraf",
+		Sync:     &sync,
+		Log:      &testutil.Logger{},
 	}
 	require.NoError(t, plugin.Init())
 	require.NoError(t, plugin.Connect())
@@ -286,12 +272,12 @@ func TestWriteExplicitSync(t *testing.T) {
 
 	// Test writing
 	metrics := []telegraf.Metric{
-		testutil.MustMetric(
+		metric.New(
 			"cpu",
 			map[string]string{
 				"database": "foobar",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"value": 42.123,
 			},
 			time.Unix(0, 0),
@@ -335,12 +321,10 @@ func TestWriteNotConvertUint(t *testing.T) {
 
 	// Setup plugin and connect
 	plugin := &InfluxDB{
-		URLs: []string{"http://" + ts.Listener.Addr().String()},
-		clientConfig: clientConfig{
-			Database:        "telegraf",
-			ContentEncoding: "identity",
-		},
-		Log: &testutil.Logger{},
+		URLs:            []string{"http://" + ts.Listener.Addr().String()},
+		Database:        "telegraf",
+		ContentEncoding: "identity",
+		Log:             &testutil.Logger{},
 	}
 	require.NoError(t, plugin.Init())
 	require.NoError(t, plugin.Connect())
@@ -348,10 +332,10 @@ func TestWriteNotConvertUint(t *testing.T) {
 
 	// Test writing
 	metrics := []telegraf.Metric{
-		testutil.MustMetric(
+		metric.New(
 			"cpu",
 			map[string]string{},
-			map[string]interface{}{
+			map[string]any{
 				"value": uint64(42),
 			},
 			time.Unix(0, 0),
@@ -395,13 +379,11 @@ func TestWriteConvertUint(t *testing.T) {
 
 	// Setup plugin and connect
 	plugin := &InfluxDB{
-		URLs: []string{"http://" + ts.Listener.Addr().String()},
-		clientConfig: clientConfig{
-			Database:        "telegraf",
-			ConvertUint:     true,
-			ContentEncoding: "identity",
-		},
-		Log: &testutil.Logger{},
+		URLs:            []string{"http://" + ts.Listener.Addr().String()},
+		Database:        "telegraf",
+		ConvertUint:     true,
+		ContentEncoding: "identity",
+		Log:             &testutil.Logger{},
 	}
 	require.NoError(t, plugin.Init())
 	require.NoError(t, plugin.Connect())
@@ -409,10 +391,10 @@ func TestWriteConvertUint(t *testing.T) {
 
 	// Test writing
 	metrics := []telegraf.Metric{
-		testutil.MustMetric(
+		metric.New(
 			"cpu",
 			map[string]string{},
-			map[string]interface{}{
+			map[string]any{
 				"value": uint64(42),
 			},
 			time.Unix(0, 0),
@@ -444,12 +426,10 @@ func TestWriteExplicitNoSync(t *testing.T) {
 	// Setup plugin and connect
 	sync := false
 	plugin := &InfluxDB{
-		URLs: []string{"http://" + ts.Listener.Addr().String()},
-		clientConfig: clientConfig{
-			Database: "telegraf",
-			Sync:     &sync,
-		},
-		Log: &testutil.Logger{},
+		URLs:     []string{"http://" + ts.Listener.Addr().String()},
+		Database: "telegraf",
+		Sync:     &sync,
+		Log:      &testutil.Logger{},
 	}
 	require.NoError(t, plugin.Init())
 	require.NoError(t, plugin.Connect())
@@ -457,12 +437,12 @@ func TestWriteExplicitNoSync(t *testing.T) {
 
 	// Test writing
 	metrics := []telegraf.Metric{
-		testutil.MustMetric(
+		metric.New(
 			"cpu",
 			map[string]string{
 				"database": "foobar",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"value": 42.123,
 			},
 			time.Unix(0, 0),
@@ -512,14 +492,12 @@ func TestWriteDatabaseTagWorksOnRetry(t *testing.T) {
 
 	// Setup plugin and connect
 	plugin := &InfluxDB{
-		URLs: []string{"http://" + ts.Listener.Addr().String()},
-		clientConfig: clientConfig{
-			Database:           "telegraf",
-			DatabaseTag:        "database",
-			ExcludeDatabaseTag: true,
-			ContentEncoding:    "identity",
-		},
-		Log: &testutil.Logger{},
+		URLs:               []string{"http://" + ts.Listener.Addr().String()},
+		Database:           "telegraf",
+		DatabaseTag:        "database",
+		ExcludeDatabaseTag: true,
+		ContentEncoding:    "identity",
+		Log:                &testutil.Logger{},
 	}
 	require.NoError(t, plugin.Init())
 	require.NoError(t, plugin.Connect())
@@ -527,12 +505,12 @@ func TestWriteDatabaseTagWorksOnRetry(t *testing.T) {
 
 	// Send the metrics which should be succeed if sent twice
 	metrics := []telegraf.Metric{
-		testutil.MustMetric(
+		metric.New(
 			"cpu",
 			map[string]string{
 				"database": "foo",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"value": 42.0,
 			},
 			time.Unix(0, 0),
@@ -579,14 +557,12 @@ func TestTooLargeWriteRetry(t *testing.T) {
 
 	// Setup plugin and connect
 	plugin := &InfluxDB{
-		URLs: []string{"http://" + ts.Listener.Addr().String()},
-		clientConfig: clientConfig{
-			Database:           "telegraf",
-			DatabaseTag:        "database",
-			ExcludeDatabaseTag: true,
-			ContentEncoding:    "identity",
-		},
-		Log: &testutil.Logger{},
+		URLs:               []string{"http://" + ts.Listener.Addr().String()},
+		Database:           "telegraf",
+		DatabaseTag:        "database",
+		ExcludeDatabaseTag: true,
+		ContentEncoding:    "identity",
+		Log:                &testutil.Logger{},
 	}
 	require.NoError(t, plugin.Init())
 	require.NoError(t, plugin.Connect())
@@ -599,7 +575,7 @@ func TestTooLargeWriteRetry(t *testing.T) {
 			map[string]string{
 				"database": "foo",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"value": 42.0,
 			},
 			time.Unix(0, 0),
@@ -609,7 +585,7 @@ func TestTooLargeWriteRetry(t *testing.T) {
 			map[string]string{
 				"database": "bar",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"value": 99.0,
 			},
 			time.Unix(0, 0),
@@ -624,7 +600,7 @@ func TestTooLargeWriteRetry(t *testing.T) {
 			map[string]string{
 				"database": "foobar",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"value": 123.456,
 			},
 			time.Unix(0, 0),
@@ -634,7 +610,7 @@ func TestTooLargeWriteRetry(t *testing.T) {
 			map[string]string{
 				"database": "fizzbuzzbang",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"value": 999.999,
 			},
 			time.Unix(0, 0),
@@ -675,16 +651,12 @@ func TestRateLimit(t *testing.T) {
 
 	// Setup plugin and connect
 	plugin := &InfluxDB{
-		URLs: []string{"http://" + ts.Listener.Addr().String()},
-		clientConfig: clientConfig{
-			Database:        "telegraf",
-			ContentEncoding: "identity",
-			RateLimitConfig: ratelimiter.RateLimitConfig{
-				Limit:  50,
-				Period: config.Duration(time.Second),
-			},
-		},
-		Log: &testutil.Logger{},
+		URLs:            []string{"http://" + ts.Listener.Addr().String()},
+		Database:        "telegraf",
+		ContentEncoding: "identity",
+		Limit:           50,
+		Period:          config.Duration(time.Second),
+		Log:             &testutil.Logger{},
 	}
 	require.NoError(t, plugin.Init())
 	require.NoError(t, plugin.Connect())
@@ -695,7 +667,7 @@ func TestRateLimit(t *testing.T) {
 		metric.New(
 			"cpu",
 			map[string]string{},
-			map[string]interface{}{
+			map[string]any{
 				"value": 42.0,
 			},
 			time.Unix(0, 1),
@@ -703,7 +675,7 @@ func TestRateLimit(t *testing.T) {
 		metric.New(
 			"cpu",
 			map[string]string{},
-			map[string]interface{}{
+			map[string]any{
 				"value": 99.0,
 			},
 			time.Unix(0, 2),
@@ -713,7 +685,7 @@ func TestRateLimit(t *testing.T) {
 			map[string]string{
 				"machine": "A",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"value": 123.456,
 			},
 			time.Unix(0, 3),
@@ -723,7 +695,7 @@ func TestRateLimit(t *testing.T) {
 			map[string]string{
 				"machine": "B",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"temp":      48.235,
 				"remaining": 999.999,
 			},
@@ -785,11 +757,9 @@ func TestStatusCodeNonRetryable4xx(t *testing.T) {
 
 			// Setup plugin and connect
 			plugin := &InfluxDB{
-				URLs: []string{"http://" + ts.Listener.Addr().String()},
-				clientConfig: clientConfig{
-					DatabaseTag: "database",
-				},
-				Log: &testutil.Logger{},
+				URLs:        []string{"http://" + ts.Listener.Addr().String()},
+				DatabaseTag: "database",
+				Log:         &testutil.Logger{},
 			}
 			require.NoError(t, plugin.Init())
 			require.NoError(t, plugin.Connect())
@@ -802,7 +772,7 @@ func TestStatusCodeNonRetryable4xx(t *testing.T) {
 					map[string]string{
 						"database": "foo",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"value": 0.0,
 					},
 					time.Unix(0, 0),
@@ -812,7 +782,7 @@ func TestStatusCodeNonRetryable4xx(t *testing.T) {
 					map[string]string{
 						"database": "my_database",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"value": 42.0,
 					},
 					time.Unix(0, 1),
@@ -822,7 +792,7 @@ func TestStatusCodeNonRetryable4xx(t *testing.T) {
 					map[string]string{
 						"database": "my_database",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"value": 43.0,
 					},
 					time.Unix(0, 2),
@@ -832,7 +802,7 @@ func TestStatusCodeNonRetryable4xx(t *testing.T) {
 					map[string]string{
 						"database": "foo",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"value": 0.0,
 					},
 					time.Unix(0, 3),
@@ -879,11 +849,9 @@ func TestStatusCodeInvalidAuthentication(t *testing.T) {
 
 			// Setup plugin and connect
 			plugin := &InfluxDB{
-				URLs: []string{"http://" + ts.Listener.Addr().String()},
-				clientConfig: clientConfig{
-					DatabaseTag: "database",
-				},
-				Log: &testutil.Logger{},
+				URLs:        []string{"http://" + ts.Listener.Addr().String()},
+				DatabaseTag: "database",
+				Log:         &testutil.Logger{},
 			}
 			require.NoError(t, plugin.Init())
 			require.NoError(t, plugin.Connect())
@@ -896,7 +864,7 @@ func TestStatusCodeInvalidAuthentication(t *testing.T) {
 					map[string]string{
 						"database": "foo",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"value": 0.0,
 					},
 					time.Unix(0, 0),
@@ -906,7 +874,7 @@ func TestStatusCodeInvalidAuthentication(t *testing.T) {
 					map[string]string{
 						"database": "my_database",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"value": 42.0,
 					},
 					time.Unix(0, 1),
@@ -916,7 +884,7 @@ func TestStatusCodeInvalidAuthentication(t *testing.T) {
 					map[string]string{
 						"database": "my_database",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"value": 43.0,
 					},
 					time.Unix(0, 2),
@@ -926,7 +894,7 @@ func TestStatusCodeInvalidAuthentication(t *testing.T) {
 					map[string]string{
 						"database": "foo",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"value": 0.0,
 					},
 					time.Unix(0, 3),
@@ -976,11 +944,9 @@ func TestStatusCodeServiceUnavailable(t *testing.T) {
 
 			// Setup plugin and connect
 			plugin := &InfluxDB{
-				URLs: []string{"http://" + ts.Listener.Addr().String()},
-				clientConfig: clientConfig{
-					DatabaseTag: "database",
-				},
-				Log: &testutil.Logger{},
+				URLs:        []string{"http://" + ts.Listener.Addr().String()},
+				DatabaseTag: "database",
+				Log:         &testutil.Logger{},
 			}
 			require.NoError(t, plugin.Init())
 			require.NoError(t, plugin.Connect())
@@ -993,7 +959,7 @@ func TestStatusCodeServiceUnavailable(t *testing.T) {
 					map[string]string{
 						"database": "foo",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"value": 0.0,
 					},
 					time.Unix(0, 0),
@@ -1003,7 +969,7 @@ func TestStatusCodeServiceUnavailable(t *testing.T) {
 					map[string]string{
 						"database": "my_database",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"value": 42.0,
 					},
 					time.Unix(0, 1),
@@ -1013,7 +979,7 @@ func TestStatusCodeServiceUnavailable(t *testing.T) {
 					map[string]string{
 						"database": "my_database",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"value": 43.0,
 					},
 					time.Unix(0, 2),
@@ -1023,7 +989,7 @@ func TestStatusCodeServiceUnavailable(t *testing.T) {
 					map[string]string{
 						"database": "foo",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"value": 0.0,
 					},
 					time.Unix(0, 3),
@@ -1067,11 +1033,9 @@ func TestStatusCodeUnexpected(t *testing.T) {
 
 			// Setup plugin and connect
 			plugin := &InfluxDB{
-				URLs: []string{"http://" + ts.Listener.Addr().String()},
-				clientConfig: clientConfig{
-					DatabaseTag: "database",
-				},
-				Log: &testutil.Logger{},
+				URLs:        []string{"http://" + ts.Listener.Addr().String()},
+				DatabaseTag: "database",
+				Log:         &testutil.Logger{},
 			}
 			require.NoError(t, plugin.Init())
 			require.NoError(t, plugin.Connect())
@@ -1084,7 +1048,7 @@ func TestStatusCodeUnexpected(t *testing.T) {
 					map[string]string{
 						"database": "foo",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"value": 0.0,
 					},
 					time.Unix(0, 0),
@@ -1094,7 +1058,7 @@ func TestStatusCodeUnexpected(t *testing.T) {
 					map[string]string{
 						"database": "my_database",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"value": 42.0,
 					},
 					time.Unix(0, 1),
@@ -1104,7 +1068,7 @@ func TestStatusCodeUnexpected(t *testing.T) {
 					map[string]string{
 						"database": "my_database",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"value": 43.0,
 					},
 					time.Unix(0, 2),
@@ -1114,7 +1078,7 @@ func TestStatusCodeUnexpected(t *testing.T) {
 					map[string]string{
 						"database": "foo",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"value": 0.0,
 					},
 					time.Unix(0, 3),
@@ -1149,7 +1113,7 @@ func TestCoreIntegration(t *testing.T) {
 		},
 		Cmd: []string{"influxdb3", "serve", "--without-auth"},
 		WaitingFor: wait.ForAll(
-			wait.ForListeningPort(nat.Port("8181")),
+			wait.ForListeningPort("8181"),
 			wait.ForLog("influxdb3_server: startup time"),
 		),
 	}
@@ -1158,11 +1122,9 @@ func TestCoreIntegration(t *testing.T) {
 
 	// Setup plugin and connect
 	plugin := &InfluxDB{
-		URLs: []string{"http://" + container.Address + ":" + container.Ports["8181"]},
-		clientConfig: clientConfig{
-			Database: "test",
-		},
-		Log: &testutil.Logger{},
+		URLs:     []string{"http://" + container.Address + ":" + container.Ports["8181"]},
+		Database: "test",
+		Log:      &testutil.Logger{},
 	}
 	require.NoError(t, plugin.Init())
 	require.NoError(t, plugin.Connect())
@@ -1173,19 +1135,19 @@ func TestCoreIntegration(t *testing.T) {
 		metric.New(
 			"cpu",
 			map[string]string{},
-			map[string]interface{}{"value": 0.0},
+			map[string]any{"value": 0.0},
 			time.Unix(0, 0),
 		),
 		metric.New(
 			"cpu",
 			map[string]string{},
-			map[string]interface{}{"value": 42.0},
+			map[string]any{"value": 42.0},
 			time.Unix(0, 1),
 		),
 		metric.New(
 			"cpu",
 			map[string]string{},
-			map[string]interface{}{"value": 43.0},
+			map[string]any{"value": 43.0},
 			time.Unix(0, 2),
 		),
 	}

@@ -6,11 +6,13 @@ package systemd_units
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"math"
 	"os/user"
 	"path"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/coreos/go-systemd/v22/dbus"
@@ -18,6 +20,7 @@ import (
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/config"
 	"github.com/influxdata/telegraf/filter"
+	"github.com/influxdata/telegraf/internal"
 	"github.com/influxdata/telegraf/plugins/inputs"
 )
 
@@ -160,10 +163,10 @@ type client interface {
 	ListUnitsByNamesContext(ctx context.Context, units []string) ([]dbus.UnitStatus, error)
 
 	// GetUnitTypePropertiesContext returns the extra properties for a unit, specific to the unit type.
-	GetUnitTypePropertiesContext(ctx context.Context, unit, unitType string) (map[string]interface{}, error)
+	GetUnitTypePropertiesContext(ctx context.Context, unit, unitType string) (map[string]any, error)
 
 	// GetUnitPropertiesContext takes the (unescaped) unit name and returns all of its dbus object properties.
-	GetUnitPropertiesContext(ctx context.Context, unit string) (map[string]interface{}, error)
+	GetUnitPropertiesContext(ctx context.Context, unit string) (map[string]any, error)
 
 	// ListUnitsContext returns an array with all currently loaded units.
 	ListUnitsContext(ctx context.Context) ([]dbus.UnitStatus, error)
@@ -229,7 +232,20 @@ func (s *SystemdUnits) Start(telegraf.Accumulator) error {
 		client, err = dbus.NewSystemConnectionContext(ctx)
 	}
 	if err != nil {
-		return err
+		// Only a refused, reset or busy bus can recover. A missing socket,
+		// a missing session bus address or a failed authentication won't.
+		return &internal.StartupError{
+			Err:   fmt.Errorf("connecting to the %s bus failed: %w", s.scope, err),
+			Retry: errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EAGAIN),
+		}
+	}
+
+	// The bus might be available without systemd running on it
+	if _, err := client.GetManagerProperty("Version"); err != nil {
+		client.Close()
+		return &internal.StartupError{
+			Err: fmt.Errorf("querying systemd on the %s bus failed: %w", s.scope, err),
+		}
 	}
 
 	s.client = client
@@ -383,7 +399,7 @@ func (s *SystemdUnits) Gather(acc telegraf.Accumulator) error {
 			tags["user"] = s.user
 		}
 
-		fields := map[string]interface{}{
+		fields := map[string]any{
 			"load_code":   load,
 			"active_code": active,
 			"sub_code":    subState,
@@ -399,7 +415,7 @@ func (s *SystemdUnits) Gather(acc telegraf.Accumulator) error {
 				}
 				// For other units we make up properties, usually those are
 				// disabled multi-instance units
-				properties = map[string]interface{}{
+				properties = map[string]any{
 					"StatusErrno": int64(-1),
 					"NRestarts":   uint64(0),
 				}

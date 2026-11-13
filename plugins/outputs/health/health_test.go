@@ -45,10 +45,10 @@ func TestHealth(t *testing.T) {
 				},
 			},
 			metrics: []telegraf.Metric{
-				testutil.MustMetric(
+				metric.New(
 					"cpu",
 					map[string]string{},
-					map[string]interface{}{
+					map[string]any{
 						"time_idle": 42,
 					},
 					now),
@@ -66,10 +66,10 @@ func TestHealth(t *testing.T) {
 				},
 			},
 			metrics: []telegraf.Metric{
-				testutil.MustMetric(
+				metric.New(
 					"cpu",
 					map[string]string{},
-					map[string]interface{}{
+					map[string]any{
 						"time_idle": 42,
 					},
 					now),
@@ -92,10 +92,10 @@ func TestHealth(t *testing.T) {
 				},
 			},
 			metrics: []telegraf.Metric{
-				testutil.MustMetric(
+				metric.New(
 					"cpu",
 					map[string]string{},
-					map[string]interface{}{
+					map[string]any{
 						"time_idle": 42,
 					},
 					now),
@@ -244,14 +244,14 @@ func TestTimeBetweenMetrics(t *testing.T) {
 			name:                  "healthy when disabled and old metric",
 			maxTimeBetweenMetrics: config.Duration(0),
 			metrics: []telegraf.Metric{
-				testutil.MustMetric(
+				metric.New(
 					"cpu",
 					map[string]string{},
 					map[string]any{
 						"time_idle": 42,
 					},
 					arbitraryTime),
-				testutil.MustMetric(
+				metric.New(
 					"cpu",
 					map[string]string{},
 					map[string]any{
@@ -266,7 +266,7 @@ func TestTimeBetweenMetrics(t *testing.T) {
 			name:                  "healthy when enabled and recent metric",
 			maxTimeBetweenMetrics: config.Duration(5 * time.Second),
 			metrics: []telegraf.Metric{
-				testutil.MustMetric(
+				metric.New(
 					"cpu",
 					map[string]string{},
 					map[string]any{
@@ -281,14 +281,14 @@ func TestTimeBetweenMetrics(t *testing.T) {
 			name:                  "unhealthy when enabled and old metric",
 			maxTimeBetweenMetrics: config.Duration(5 * time.Millisecond),
 			metrics: []telegraf.Metric{
-				testutil.MustMetric(
+				metric.New(
 					"cpu",
 					map[string]string{},
 					map[string]any{
 						"time_idle": 42,
 					},
 					arbitraryTime),
-				testutil.MustMetric(
+				metric.New(
 					"cpu",
 					map[string]string{},
 					map[string]any{
@@ -355,7 +355,7 @@ func TestDefaultStatusHealthy(t *testing.T) {
 				metric.New(
 					"cpu",
 					map[string]string{},
-					map[string]interface{}{
+					map[string]any{
 						"time_idle": 42,
 					},
 					time.Now(),
@@ -370,7 +370,7 @@ func TestDefaultStatusHealthy(t *testing.T) {
 				metric.New(
 					"cpu",
 					map[string]string{},
-					map[string]interface{}{
+					map[string]any{
 						"time_idle": 42,
 					},
 					time.Now(),

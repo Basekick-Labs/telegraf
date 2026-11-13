@@ -107,6 +107,21 @@ type namedSet struct {
 	Name   string `json:"name"`
 	Table  string `json:"table"`
 	Elem   []elem `json:"elem,omitempty"`
+	Count  *int64 `json:"count,omitempty"`
+}
+
+func (s *namedSet) count() int64 {
+	if s.Count != nil {
+		return *s.Count
+	}
+	return int64(len(s.Elem))
 }
 
 type elem struct{}
+
+// UnmarshalJSON accepts any JSON value type. Statically defined nftables sets
+// use plain strings for elements while dynamically added entries use objects.
+// Since the plugin only counts elements, the content is discarded.
+func (*elem) UnmarshalJSON([]byte) error {
+	return nil
+}

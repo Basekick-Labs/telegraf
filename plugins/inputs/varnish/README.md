@@ -28,7 +28,8 @@ plugin ordering. See [CONFIGURATION.md][CONFIGURATION.md] for more details.
 # A plugin to collect stats from Varnish HTTP Cache
 # This plugin ONLY supports non-Windows
 [[inputs.varnish]]
-  ## If running as a restricted user you can prepend sudo for additional access:
+  ## If running as a restricted user you can prepend sudo for additional access.
+  ## On OpenBSD, doas is used instead of sudo.
   #use_sudo = false
 
   ## The default location of the varnishstat binary can be overridden with:
@@ -350,7 +351,7 @@ be used as a tag, and removed from field names.
   - VBE.default(127.0.0.1,,8080).bereq_hdrbytes   (uint64, count, Req. header bytes)
   - VBE.default(127.0.0.1,,8080).bereq_bodybytes  (uint64, count, Request body bytes)
   - VBE.default(127.0.0.1,,8080).beresp_hdrbytes  (uint64, count, Resp. header bytes)
-  - VBE.default(127.0.0.1,,8080).beresp_bodybytes (uint64, count, Response body bytes)
+  - VBE.default(127.0.0.1,,8080).beresp_bodybytes (uint64, count, Resp. body bytes)
   - VBE.default(127.0.0.1,,8080).pipe_hdrbytes    (uint64, count, Pipe request header)
   - VBE.default(127.0.0.1,,8080).pipe_out         (uint64, count, Piped bytes to)
   - VBE.default(127.0.0.1,,8080).pipe_in          (uint64, count, Piped bytes from)

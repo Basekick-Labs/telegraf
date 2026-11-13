@@ -203,10 +203,9 @@ clients to properly work when the version needs to be checked. To enable
 compatibility mode users need to set the `override_main_response_version` to
 `true`.
 
-On existing clusters run:
+On existing clusters run `PUT /_cluster/settings` with
 
 ```json
-PUT /_cluster/settings
 {
   "persistent" : {
     "compatibility.override_main_response_version" : true
@@ -214,10 +213,11 @@ PUT /_cluster/settings
 }
 ```
 
-And on new clusters set the option to true under advanced options:
+And on new clusters execute
+`POST https://es.us-east-1.amazonaws.com/2021-01-01/opensearch/upgradeDomain`and
+set the option to `true` under advanced options
 
 ```json
-POST https://es.us-east-1.amazonaws.com/2021-01-01/opensearch/upgradeDomain
 {
   "DomainName": "domain-name",
   "TargetVersion": "OpenSearch_1.0",
@@ -237,11 +237,11 @@ plugin ordering. See [CONFIGURATION.md][CONFIGURATION.md] for more details.
 
 [CONFIGURATION.md]: ../../../docs/CONFIGURATION.md#plugins
 
-## Secret-store support
+## Secret store support
 
-This plugin supports secrets from secret-stores for the `username`,
+This plugin supports secrets from secret stores for the `username`,
 `password` and `auth_bearer_token` option.
-See the [secret-store documentation][SECRETSTORE] for more details on how
+See the [secret store documentation][SECRETSTORE] for more details on how
 to use them.
 
 [SECRETSTORE]: ../../../docs/CONFIGURATION.md#secret-store-secrets
@@ -255,6 +255,9 @@ to use them.
   ## Multiple urls can be specified as part of the same cluster,
   ## this means that only ONE of the urls will be written to each interval
   urls = [ "http://node1.es.example.com:9200" ] # required.
+  ## Local address to bind when connecting to the server
+  ## If empty or not set, the local address is automatically chosen.
+  # local_address = ""
   ## Elasticsearch client timeout, defaults to "5s" if not set.
   timeout = "5s"
   ## Set to true to ask Elasticsearch a list of all cluster nodes,

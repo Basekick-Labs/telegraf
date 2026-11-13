@@ -7,10 +7,9 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"slices"
 	"sync"
 	"time"
-
-	"github.com/fatih/color"
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/config"
@@ -29,6 +28,11 @@ type Agent struct {
 
 // NewAgent returns an Agent for the given Config.
 func NewAgent(cfg *config.Config) *Agent {
+	// Skip the second processor run by default unless the first one is skipped
+	if cfg.Agent.SkipProcessorsAfterAggregators == nil {
+		cfg.Agent.SkipProcessorsAfterAggregators = new(!cfg.Agent.SkipProcessorsBeforeAggregators)
+	}
+
 	a := &Agent{
 		Config: cfg,
 	}
@@ -109,15 +113,6 @@ func (a *Agent) Run(ctx context.Context) error {
 		time.Duration(a.Config.Agent.Interval), a.Config.Agent.Quiet,
 		a.Config.Agent.Hostname, time.Duration(a.Config.Agent.FlushInterval))
 
-	// Set the default for processor skipping
-	if a.Config.Agent.SkipProcessorsAfterAggregators == nil {
-		msg := `The default value of 'skip_processors_after_aggregators' will change to 'true' with Telegraf v1.40.0! `
-		msg += `If you need the current default behavior, please explicitly set the option to 'false'!`
-		log.Print("W! [agent] ", color.YellowString(msg))
-		skipProcessorsAfterAggregators := false
-		a.Config.Agent.SkipProcessorsAfterAggregators = &skipProcessorsAfterAggregators
-	}
-
 	log.Printf("D! [agent] Initializing plugins")
 	if err := a.InitPlugins(); err != nil {
 		return err
@@ -172,39 +167,29 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		a.runOutputs(ou)
-	}()
+	})
 
 	if au != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			a.runProcessors(apu)
-		}()
+		})
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			a.runAggregators(startTime, au)
-		}()
+		})
 	}
 
 	if pu != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			a.runProcessors(pu)
-		}()
+		})
 	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		a.runInputs(ctx, startTime, iu)
-	}()
+	})
 
 	wg.Wait()
 
@@ -367,8 +352,7 @@ func (*Agent) startInputs(dst chan<- telegraf.Metric, inputs []*models.RunningIn
 
 		if err := input.Start(acc); err != nil {
 			// If the model tells us to remove the plugin we do so without error
-			var fatalErr *internal.FatalError
-			if errors.As(err, &fatalErr) {
+			if _, ok := errors.AsType[*internal.FatalError](err); ok {
 				log.Printf("I! [agent] Failed to start %s, shutting down plugin: %s", input.LogName(), err)
 				continue
 			}
@@ -418,7 +402,7 @@ func (a *Agent) runInputs(ctx context.Context, startTime time.Time, unit *inputU
 
 		// Overwrite agent collection_jitter if this plugin has its own.
 		jitter := time.Duration(a.Config.Agent.CollectionJitter)
-		if input.Config.CollectionJitter != 0 {
+		if input.Config.CollectionJitterSet {
 			jitter = input.Config.CollectionJitter
 		}
 
@@ -489,7 +473,7 @@ func (a *Agent) testRunInputs(
 
 	nul := make(chan telegraf.Metric)
 	go func() {
-		//nolint:revive // empty block needed here
+		// empty block needed here
 		for range nul {
 		}
 	}()
@@ -619,9 +603,7 @@ func (*Agent) startProcessors(dst chan<- telegraf.Metric, runningProcessors mode
 	// processor-list is sorted by order and/or by appearance in the config,
 	// i.e. in input-to-output direction. Therefore, reverse the processor list
 	// to reflect the order/definition order in the processing chain.
-	for i := len(runningProcessors) - 1; i >= 0; i-- {
-		processor := runningProcessors[i]
-
+	for _, processor := range slices.Backward(runningProcessors) {
 		src = make(chan telegraf.Metric, 100)
 		acc := NewAccumulator(processor, dst)
 
@@ -697,9 +679,7 @@ func (a *Agent) runAggregators(
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for metric := range unit.src {
 			var dropOriginal bool
 			for _, agg := range a.Config.Aggregators {
@@ -715,7 +695,7 @@ func (a *Agent) runAggregators(
 			}
 		}
 		cancel()
-	}()
+	})
 
 	for _, agg := range a.Config.Aggregators {
 		wg.Add(1)
@@ -766,6 +746,16 @@ func (*Agent) push(ctx context.Context, aggregator *models.RunningAggregator, ac
 
 		select {
 		case <-time.After(until):
+			// With round_interval the window end is a wall-clock time while
+			// the timer sleeps on the monotonic clock, so the timer can fire
+			// before the wall clock reaches the window end. Re-arm for the
+			// remainder rather than pushing early, which would reset the
+			// window onto the same slot and push it twice. A remainder of a
+			// full period or more is a clock adjustment, which Push handles
+			// by resetting the window, so let that through.
+			if remaining := time.Until(aggregator.EndPeriod()); remaining > 0 && remaining < aggregator.Period() {
+				continue
+			}
 			aggregator.Push(acc)
 		case <-ctx.Done():
 			aggregator.Push(acc)
@@ -784,8 +774,7 @@ func (a *Agent) startOutputs(
 	unit := &outputUnit{src: src}
 	for _, output := range outputs {
 		if err := a.connectOutput(ctx, output); err != nil {
-			var fatalErr *internal.FatalError
-			if errors.As(err, &fatalErr) {
+			if _, ok := errors.AsType[*internal.FatalError](err); ok {
 				// If the model tells us to remove the plugin we do so without error
 				log.Printf("I! [agent] Failed to connect to [%s], error was %q;  shutting down plugin...", output.LogName(), err)
 				output.Close()
@@ -948,9 +937,7 @@ func (a *Agent) Test(ctx context.Context, wait time.Duration) error {
 	src := make(chan telegraf.Metric, 100)
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		s := &influx.Serializer{SortFields: true, UintSupport: true}
 		for metric := range src {
 			octets, err := s.Serialize(metric)
@@ -959,7 +946,7 @@ func (a *Agent) Test(ctx context.Context, wait time.Duration) error {
 			}
 			metric.Reject()
 		}
-	}()
+	})
 
 	err := a.runTest(ctx, wait, src)
 	if err != nil {
@@ -978,15 +965,6 @@ func (a *Agent) Test(ctx context.Context, wait time.Duration) error {
 // outputC. After gathering pauses for the wait duration to allow service
 // inputs to run.
 func (a *Agent) runTest(ctx context.Context, wait time.Duration, outputC chan<- telegraf.Metric) error {
-	// Set the default for processor skipping
-	if a.Config.Agent.SkipProcessorsAfterAggregators == nil {
-		msg := `The default value of 'skip_processors_after_aggregators' will change to 'true' with Telegraf v1.40.0! `
-		msg += `If you need the current default behavior, please explicitly set the option to 'false'!`
-		log.Print("W! [agent] ", color.YellowString(msg))
-		skipProcessorsAfterAggregators := false
-		a.Config.Agent.SkipProcessorsAfterAggregators = &skipProcessorsAfterAggregators
-	}
-
 	log.Printf("D! [agent] Initializing plugins")
 	if err := a.InitPlugins(); err != nil {
 		return err
@@ -1024,32 +1002,24 @@ func (a *Agent) runTest(ctx context.Context, wait time.Duration, outputC chan<- 
 
 	var wg sync.WaitGroup
 	if au != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			a.runProcessors(apu)
-		}()
+		})
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			a.runAggregators(startTime, au)
-		}()
+		})
 	}
 
 	if pu != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			a.runProcessors(pu)
-		}()
+		})
 	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		a.testRunInputs(ctx, wait, iu)
-	}()
+	})
 
 	wg.Wait()
 
@@ -1083,15 +1053,6 @@ func (a *Agent) Once(ctx context.Context, wait time.Duration) error {
 // outputC. After gathering pauses for the wait duration to allow service
 // inputs to run.
 func (a *Agent) runOnce(ctx context.Context, wait time.Duration) error {
-	// Set the default for processor skipping
-	if a.Config.Agent.SkipProcessorsAfterAggregators == nil {
-		msg := `The default value of 'skip_processors_after_aggregators' will change to 'true' with Telegraf v1.40.0! `
-		msg += `If you need the current default behavior, please explicitly set the option to 'false'!`
-		log.Print("W! [agent] ", color.YellowString(msg))
-		skipProcessorsAfterAggregators := false
-		a.Config.Agent.SkipProcessorsAfterAggregators = &skipProcessorsAfterAggregators
-	}
-
 	log.Printf("D! [agent] Initializing plugins")
 	if err := a.InitPlugins(); err != nil {
 		return err
@@ -1130,39 +1091,29 @@ func (a *Agent) runOnce(ctx context.Context, wait time.Duration) error {
 	iu := a.testStartInputs(next, a.Config.Inputs)
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		a.runOutputs(ou)
-	}()
+	})
 
 	if au != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			a.runProcessors(apu)
-		}()
+		})
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			a.runAggregators(startTime, au)
-		}()
+		})
 	}
 
 	if pu != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			a.runProcessors(pu)
-		}()
+		})
 	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		a.testRunInputs(ctx, wait, iu)
-	}()
+	})
 
 	wg.Wait()
 

@@ -68,6 +68,8 @@ type KubernetesInventory struct {
 	SelectorInclude []string `toml:"selector_include"`
 	SelectorExclude []string `toml:"selector_exclude"`
 
+	PodWorkloadTags bool `toml:"pod_workload_tags"`
+
 	NodeName string          `toml:"node_name"`
 	Log      telegraf.Logger `toml:"-"`
 
@@ -162,7 +164,7 @@ func (ki *KubernetesInventory) convertQuantity(s string, m float64) int64 {
 	return int64(f * m)
 }
 
-func (ki *KubernetesInventory) queryPodsFromKubelet(url string, v interface{}) error {
+func (ki *KubernetesInventory) queryPodsFromKubelet(url string, v any) error {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return fmt.Errorf("creating new http request for url %s failed: %w", url, err)

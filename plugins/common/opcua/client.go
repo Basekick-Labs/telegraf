@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log" //nolint:depguard // just for debug
+	"math"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"time"
 
@@ -20,6 +22,10 @@ import (
 
 type OpcUAWorkarounds struct {
 	AdditionalValidStatusCodes []string `toml:"additional_valid_status_codes"`
+	// MonitoredItemsBatchSize splits CreateMonitoredItems into batches of this
+	// size to stay below a server's negotiated maximum message size. It only
+	// applies to subscriptions (opcua_listener); the polling opcua input ignores it.
+	MonitoredItemsBatchSize int `toml:"monitored_items_batch_size"`
 }
 
 type ConnectionState opcua.ConnState
@@ -53,6 +59,7 @@ type OpcUAClientConfig struct {
 	OptionalFields []string         `toml:"optional_fields"`
 	Workarounds    OpcUAWorkarounds `toml:"workarounds"`
 	SessionTimeout config.Duration  `toml:"session_timeout"`
+	Locales        []string         `toml:"locales"`
 }
 
 func (o *OpcUAClientConfig) Validate() error {
@@ -191,6 +198,9 @@ type OpcUAClient struct {
 
 	opts  []opcua.Option
 	codes []ua.StatusCode
+
+	// Internal flags
+	DisableAutoReconnect bool
 }
 
 // determineOrCreateCertificates handles certificate determination and generation logic
@@ -270,7 +280,11 @@ func (o *OpcUAClient) SetupOptions() error {
 		}
 	}
 
-	if o.Config.SecurityPolicy != "None" || o.Config.SecurityMode != "None" {
+	// A client certificate is only needed when the channel is actually secured.
+	// Setting either security_policy or security_mode to "None" collapses the
+	// channel to None, so skip certificate creation (which may fail on a
+	// read-only filesystem) unless both request security.
+	if o.Config.SecurityPolicy != "None" && o.Config.SecurityMode != "None" {
 		if err := o.determineOrCreateCertificates(); err != nil {
 			return err
 		}
@@ -296,12 +310,7 @@ func (o *OpcUAClient) setupWorkarounds() error {
 }
 
 func (o *OpcUAClient) StatusCodeOK(code ua.StatusCode) bool {
-	for _, val := range o.codes {
-		if val == code {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(o.codes, code)
 }
 
 // Connect to an OPC UA device
@@ -435,4 +444,18 @@ func (o *OpcUAClient) UpdateNamespaceArray(ctx context.Context) error {
 // NamespaceArray returns the cached namespace array
 func (o *OpcUAClient) NamespaceArray() []string {
 	return o.namespaceArray
+}
+
+// OperationLimit extracts a server operation limit from the read result of
+// the corresponding capability property. Zero means "no limit".
+func OperationLimit(result *ua.DataValue) int {
+	if result.Status != ua.StatusOK || result.Value == nil {
+		return 0
+	}
+	limit, ok := result.Value.Value().(uint32)
+	if !ok {
+		return 0
+	}
+	// Clamp to avoid overflowing int on 32-bit platforms
+	return int(min(limit, math.MaxInt32))
 }

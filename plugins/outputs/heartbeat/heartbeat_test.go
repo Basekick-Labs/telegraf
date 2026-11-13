@@ -464,7 +464,7 @@ func TestIncludedExtraData(t *testing.T) {
 			schema, err := jsonschema.Compile(fmt.Sprintf("schema_v%d.json", jsonSchemaVersion))
 			require.NoError(t, err)
 
-			var v interface{}
+			var v any
 			require.NoError(t, json.Unmarshal([]byte(actual), &v))
 			require.NoError(t, schema.Validate(v))
 		})
@@ -491,7 +491,7 @@ func TestDetailedLogging(t *testing.T) {
 	tests := []struct {
 		name     string
 		source   string
-		attrs    map[string]interface{}
+		attrs    map[string]any
 		logcfg   LogsConfig
 		logs     []logEvent
 		expected string
@@ -1920,7 +1920,7 @@ func TestStatusComputation(t *testing.T) {
 			defer actualMu.Unlock()
 
 			// Check heartbeat message against the JSON schema
-			var v interface{}
+			var v any
 			require.NoError(t, json.Unmarshal([]byte(actual), &v))
 			require.NoError(t, schema.Validate(v))
 			require.JSONEq(t, expected, actual, actual)
@@ -1997,7 +1997,7 @@ func TestSending(t *testing.T) {
 	require.JSONEq(t, expected, actual, actual)
 
 	// Check heartbeat message against the JSON schema
-	var v interface{}
+	var v any
 	require.NoError(t, json.Unmarshal([]byte(actual), &v))
 	require.NoError(t, schema.Validate(v))
 }
@@ -2143,7 +2143,7 @@ func TestSendingFail(t *testing.T) {
 	require.JSONEq(t, expected, actual, actual)
 
 	// Check heartbeat message against the JSON schema
-	var v interface{}
+	var v any
 	require.NoError(t, json.Unmarshal([]byte(actual), &v))
 	require.NoError(t, schema.Validate(v))
 
@@ -2212,6 +2212,63 @@ func TestSendingFail(t *testing.T) {
 	}
 	require.Contains(t, logmsg, "An error message logged during failing sends")
 	require.Contains(t, logmsg, "Another error message logged during failing sends")
+}
+
+func TestSendingWithoutStatus(t *testing.T) {
+	// Register write stats as the running output model would
+	ostats := outputStats{
+		name:        "heartbeat",
+		id:          "test-output-1",
+		bufferLimit: 10000,
+	}
+	ostats.register()
+	defer ostats.unregister()
+
+	// Create a test server that captures heartbeat messages
+	var received atomic.Uint64
+	var receivedMessage string
+	var receivedMu sync.Mutex
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		receivedMu.Lock()
+		receivedMessage = string(body)
+		receivedMu.Unlock()
+		received.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	// Initialize the plugin without "status" in include (default config)
+	u := config.NewSecret([]byte("http://" + ts.Listener.Addr().String()))
+	defer u.Destroy()
+
+	plugin := &Heartbeat{
+		URL:        u,
+		InstanceID: "telegraf",
+		Interval:   config.Duration(100 * time.Millisecond),
+		Log:        &testutil.Logger{},
+	}
+	require.NoError(t, plugin.Init())
+	require.NoError(t, plugin.Connect())
+	defer plugin.Close()
+
+	// Wait for heartbeats to arrive
+	require.Eventually(t, func() bool {
+		return received.Load() >= 3
+	}, 2*time.Second, 100*time.Millisecond)
+
+	// Verify the message does not contain status data
+	receivedMu.Lock()
+	actual := receivedMessage
+	receivedMu.Unlock()
+
+	var msg message
+	require.NoError(t, json.Unmarshal([]byte(actual), &msg))
+	require.Empty(t, msg.Status)
 }
 
 type agentStats struct {

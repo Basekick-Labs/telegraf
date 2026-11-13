@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/influxdata/telegraf"
+	"github.com/influxdata/telegraf/plugins/common/sudo"
 	"github.com/influxdata/telegraf/plugins/inputs"
 )
 
@@ -75,7 +76,7 @@ type PF struct {
 
 type pfctlOutputStanza struct {
 	headerRE  *regexp.Regexp
-	parseFunc func([]string, map[string]interface{}) error
+	parseFunc func([]string, map[string]any) error
 	found     bool
 }
 
@@ -115,7 +116,7 @@ func errMissingData(tag string) error {
 }
 
 func parsePfctlOutput(pfoutput string, acc telegraf.Accumulator) error {
-	fields := make(map[string]interface{})
+	fields := make(map[string]any)
 	scanner := bufio.NewScanner(strings.NewReader(pfoutput))
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -149,15 +150,15 @@ func parsePfctlOutput(pfoutput string, acc telegraf.Accumulator) error {
 	return nil
 }
 
-func parseStateTable(lines []string, fields map[string]interface{}) error {
+func parseStateTable(lines []string, fields map[string]any) error {
 	return storeFieldValues(lines, stateTableRE, fields, stateTable)
 }
 
-func parseCounterTable(lines []string, fields map[string]interface{}) error {
+func parseCounterTable(lines []string, fields map[string]any) error {
 	return storeFieldValues(lines, counterTableRE, fields, counterTable)
 }
 
-func storeFieldValues(lines []string, regex *regexp.Regexp, fields map[string]interface{}, entryTable []*entry) error {
+func storeFieldValues(lines []string, regex *regexp.Regexp, fields map[string]any, entryTable []*entry) error {
 	for _, v := range lines {
 		entries := regex.FindStringSubmatch(v)
 		if entries != nil {
@@ -203,9 +204,10 @@ func (pf *PF) buildPfctlCmd() (string, []string, error) {
 	args := []string{"-s", "info"}
 	if pf.UseSudo {
 		args = append([]string{cmd}, args...)
-		cmd, err = execLookPath("sudo")
+		bin := sudo.Binary()
+		cmd, err = execLookPath(bin)
 		if err != nil {
-			return "", nil, fmt.Errorf("can't locate sudo: %w", err)
+			return "", nil, fmt.Errorf("can't locate %s: %w", bin, err)
 		}
 	}
 	return cmd, args, nil

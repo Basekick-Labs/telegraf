@@ -3,6 +3,7 @@ package procstat
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -144,7 +145,7 @@ func (p *testProc) metrics(prefix string, cfg *collectionConfig, t time.Time) ([
 		prefix += "_"
 	}
 
-	fields := map[string]interface{}{
+	fields := map[string]any{
 		prefix + "num_fds":                      int32(0),
 		prefix + "num_threads":                  int32(0),
 		prefix + "voluntary_context_switches":   int64(0),
@@ -171,12 +172,10 @@ func (p *testProc) metrics(prefix string, cfg *collectionConfig, t time.Time) ([
 		fields[prefix+"memory_usage"] = float32(0)
 	}
 
-	tags := map[string]string{
-		"process_name": "test_proc",
-	}
-	for k, v := range p.tags {
-		tags[k] = v
-	}
+	// The process tags may override the default name
+	tags := make(map[string]string, len(p.tags)+1)
+	tags["process_name"] = "test_proc"
+	maps.Copy(tags, p.tags)
 
 	// Add the tags as requested by the user
 	if cfg.tagging["cmdline"] {
@@ -251,14 +250,14 @@ func TestInitMissingPidMethod(t *testing.T) {
 
 func TestGather_CreateProcessErrorOk(t *testing.T) {
 	expected := []telegraf.Metric{
-		testutil.MustMetric(
+		metric.New(
 			"procstat_lookup",
 			map[string]string{
 				"exe":        "foo",
 				"pid_finder": "test",
 				"result":     "success",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"pid_count":   int64(1),
 				"result_code": int64(0),
 				"running":     int64(0),
@@ -287,13 +286,13 @@ func TestGather_CreateProcessErrorOk(t *testing.T) {
 
 func TestGather_ProcessName(t *testing.T) {
 	expected := []telegraf.Metric{
-		testutil.MustMetric(
+		metric.New(
 			"procstat",
 			map[string]string{
 				"exe":          "foo",
 				"process_name": "custom_name",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"child_major_faults":           uint64(0),
 				"child_minor_faults":           uint64(0),
 				"cmdline":                      "test_proc",
@@ -323,14 +322,14 @@ func TestGather_ProcessName(t *testing.T) {
 			time.Unix(0, 0),
 			telegraf.Untyped,
 		),
-		testutil.MustMetric(
+		metric.New(
 			"procstat_lookup",
 			map[string]string{
 				"exe":        "foo",
 				"pid_finder": "test",
 				"result":     "success",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"pid_count":   int64(1),
 				"result_code": int64(0),
 				"running":     int64(1),
@@ -397,7 +396,7 @@ func TestGather_NoPidTag(t *testing.T) {
 func TestGather_PidTag(t *testing.T) {
 	p := Procstat{
 		Exe:           exe,
-		PidTag:        true,
+		TagWith:       []string{"pid"},
 		PidFinder:     "test",
 		Properties:    []string{"cpu", "memory", "mmap"},
 		Log:           testutil.Logger{},
@@ -510,7 +509,7 @@ func TestGather_PercentFirstPass(t *testing.T) {
 
 	p := Procstat{
 		Pattern:       "foo",
-		PidTag:        true,
+		TagWith:       []string{"pid"},
 		PidFinder:     "test",
 		Properties:    []string{"cpu", "memory", "mmap"},
 		Log:           testutil.Logger{},
@@ -531,7 +530,7 @@ func TestGather_PercentSecondPass(t *testing.T) {
 
 	p := Procstat{
 		Pattern:       "foo",
-		PidTag:        true,
+		TagWith:       []string{"pid"},
 		PidFinder:     "test",
 		Properties:    []string{"cpu", "memory", "mmap"},
 		Log:           testutil.Logger{},

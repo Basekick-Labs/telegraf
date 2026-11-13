@@ -20,6 +20,7 @@ import (
 	"github.com/influxdata/telegraf/config"
 	"github.com/influxdata/telegraf/internal"
 	"github.com/influxdata/telegraf/internal/choice"
+	"github.com/influxdata/telegraf/plugins/common/sudo"
 	"github.com/influxdata/telegraf/plugins/inputs"
 )
 
@@ -145,7 +146,7 @@ func (m *Ipmi) parse(acc telegraf.Accumulator, server, sensor string) error {
 			if m.UseSudo {
 				// -n - avoid prompting the user for input of any kind
 				dumpOpts = append([]string{"-n", name}, dumpOpts...)
-				name = "sudo"
+				name = sudo.Binary()
 			}
 			cmd := execCommand(name, dumpOpts...)
 			out, err := internal.CombinedOutputTimeout(cmd, time.Duration(m.Timeout))
@@ -162,7 +163,7 @@ func (m *Ipmi) parse(acc telegraf.Accumulator, server, sensor string) error {
 	if m.UseSudo {
 		// -n - avoid prompting the user for input of any kind
 		opts = append([]string{"-n", name}, opts...)
-		name = "sudo"
+		name = sudo.Binary()
 	}
 	cmd := execCommand(name, opts...)
 	out, err := internal.CombinedOutputTimeout(cmd, time.Duration(m.Timeout))
@@ -194,9 +195,9 @@ func parseChassisPowerStatus(acc telegraf.Accumulator, hostname string, cmdOut [
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.Contains(line, "Chassis Power is on") {
-			acc.AddFields("ipmi_sensor", map[string]interface{}{"value": 1}, map[string]string{"name": "chassis_power_status", "server": hostname}, measuredAt)
+			acc.AddFields("ipmi_sensor", map[string]any{"value": 1}, map[string]string{"name": "chassis_power_status", "server": hostname}, measuredAt)
 		} else if strings.Contains(line, "Chassis Power is off") {
-			acc.AddFields("ipmi_sensor", map[string]interface{}{"value": 0}, map[string]string{"name": "chassis_power_status", "server": hostname}, measuredAt)
+			acc.AddFields("ipmi_sensor", map[string]any{"value": 0}, map[string]string{"name": "chassis_power_status", "server": hostname}, measuredAt)
 		}
 	}
 
@@ -222,7 +223,7 @@ func (m *Ipmi) parseDCMIPowerReading(acc telegraf.Accumulator, hostname string, 
 			tags["server"] = hostname
 		}
 
-		fields := make(map[string]interface{})
+		fields := make(map[string]any)
 		valunit := strings.Split(ipmiFields["value"], " ")
 		if len(valunit) != 2 {
 			continue
@@ -262,7 +263,7 @@ func (m *Ipmi) parseV1(acc telegraf.Accumulator, hostname string, cmdOut []byte,
 			tags["server"] = hostname
 		}
 
-		fields := make(map[string]interface{})
+		fields := make(map[string]any)
 		if strings.EqualFold("ok", trim(ipmiFields["status_code"])) {
 			fields["status"] = 1
 		} else {
@@ -322,7 +323,7 @@ func (m *Ipmi) parseV2(acc telegraf.Accumulator, hostname string, cmdOut []byte,
 		}
 		tags["entity_id"] = transform(ipmiFields["entity_id"])
 		tags["status_code"] = trim(ipmiFields["status_code"])
-		fields := make(map[string]interface{})
+		fields := make(map[string]any)
 		descriptionResults := m.extractFieldsFromRegex(reV2ParseDescription, trim(ipmiFields["description"]))
 		// This is an analog value with a unit
 		if descriptionResults["analogValue"] != "" && len(descriptionResults["analogUnit"]) >= 1 {

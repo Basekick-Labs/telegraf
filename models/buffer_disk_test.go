@@ -1,6 +1,7 @@
 package models
 
 import (
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -27,7 +28,7 @@ func TestDiskBufferTruncate(t *testing.T) {
 	// Add some metrics to the buffer
 	expected := make([]telegraf.Metric, 0, 10)
 	for i := range 10 {
-		m := metric.New("test", map[string]string{}, map[string]interface{}{"value": i}, time.Now())
+		m := metric.New("test", map[string]string{}, map[string]any{"value": i}, time.Now())
 		buf.Add(m)
 		expected = append(expected, m)
 	}
@@ -85,7 +86,7 @@ func TestDiskBufferEmptyReuse(t *testing.T) {
 	// Add some metrics to the buffer
 	expected := make([]telegraf.Metric, 0, 5)
 	for i := range 5 {
-		m := metric.New("test", map[string]string{}, map[string]interface{}{"value": i}, time.Now())
+		m := metric.New("test", map[string]string{}, map[string]any{"value": i}, time.Now())
 		buf.Add(m)
 		expected = append(expected, m)
 	}
@@ -107,7 +108,7 @@ func TestDiskBufferEmptyReuse(t *testing.T) {
 	buf.EndTransaction(tx)
 
 	// Now add another set of metrics and make sure we can read it
-	m := metric.New("test", map[string]string{}, map[string]interface{}{"value": 42}, time.Now())
+	m := metric.New("test", map[string]string{}, map[string]any{"value": 42}, time.Now())
 	buf.Add(m)
 
 	// Read the complete set of metrics such that the buffer is empty again
@@ -135,7 +136,7 @@ func TestDiskBufferEmptyClose(t *testing.T) {
 	// Add some metrics to the buffer
 	expected := make([]telegraf.Metric, 0, 5)
 	for i := range 5 {
-		m := metric.New("test", map[string]string{}, map[string]interface{}{"value": i}, time.Now())
+		m := metric.New("test", map[string]string{}, map[string]any{"value": i}, time.Now())
 		buf.Add(m)
 		expected = append(expected, m)
 	}
@@ -167,7 +168,7 @@ func TestDiskBufferEmptyClose(t *testing.T) {
 
 	// However, adding a new metric to the buffer should work
 	// Now add another set of metrics and make sure we can read it
-	m := metric.New("test", map[string]string{}, map[string]interface{}{"value": 42}, time.Now())
+	m := metric.New("test", map[string]string{}, map[string]any{"value": 42}, time.Now())
 	reopened.Add(m)
 
 	// Read the complete set of metrics such that the buffer is empty again
@@ -177,8 +178,55 @@ func TestDiskBufferEmptyClose(t *testing.T) {
 	reopened.EndTransaction(tx)
 }
 
+func TestDiskBufferEmptyCloseRemovesDirectory(t *testing.T) {
+	tmpdir := t.TempDir()
+
+	buf, err := NewBuffer("test", "id123", "", 0, "disk_write_through", tmpdir, true)
+	require.NoError(t, err)
+	require.DirExists(t, filepath.Join(tmpdir, "id123"))
+
+	// Write and remove a metric so the buffer is empty again
+	buf.Add(metric.New("test", map[string]string{}, map[string]any{"value": 1}, time.Now()))
+	tx := buf.BeginTransaction(5)
+	tx.AcceptAll()
+	buf.EndTransaction(tx)
+	require.Zero(t, buf.Len())
+
+	// Closing the empty buffer should remove its directory
+	require.NoError(t, buf.Close())
+	require.NoDirExists(t, filepath.Join(tmpdir, "id123"))
+
+	entries, err := os.ReadDir(tmpdir)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+}
+
+func TestDiskBufferNonEmptyCloseKeepsMetrics(t *testing.T) {
+	tmpdir := t.TempDir()
+
+	buf, err := NewBuffer("test", "id123", "", 0, "disk_write_through", tmpdir, true)
+	require.NoError(t, err)
+
+	m := metric.New("test", map[string]string{}, map[string]any{"value": 1}, time.Now())
+	buf.Add(m)
+
+	// Closing a buffer that still holds metrics must keep its directory
+	require.NoError(t, buf.Close())
+	require.DirExists(t, filepath.Join(tmpdir, "id123"))
+
+	// The metric should still be there after reopening the buffer
+	reopened, err := NewBuffer("test", "id123", "", 0, "disk_write_through", tmpdir, true)
+	require.NoError(t, err)
+	defer reopened.Close()
+
+	tx := reopened.BeginTransaction(5)
+	testutil.RequireMetricsEqual(t, []telegraf.Metric{m}, tx.Batch)
+	tx.AcceptAll()
+	reopened.EndTransaction(tx)
+}
+
 func TestDiskBufferRetainsTrackingInformation(t *testing.T) {
-	m := metric.New("cpu", map[string]string{}, map[string]interface{}{"value": 42.0}, time.Unix(0, 0))
+	m := metric.New("cpu", map[string]string{}, map[string]any{"value": 42.0}, time.Unix(0, 0))
 
 	var delivered int
 	mm, _ := metric.WithTracking(m, func(telegraf.DeliveryInfo) { delivered++ })
@@ -198,23 +246,23 @@ func TestDiskBufferRetainsTrackingInformation(t *testing.T) {
 }
 
 func TestDiskBufferTrackingDroppedFromOldWal(t *testing.T) {
-	m := metric.New("cpu", map[string]string{}, map[string]interface{}{"value": 42.0}, time.Unix(0, 0))
+	m := metric.New("cpu", map[string]string{}, map[string]any{"value": 42.0}, time.Unix(0, 0))
 
 	tm, _ := metric.WithTracking(m, func(telegraf.DeliveryInfo) {})
 	metrics := []telegraf.Metric{
 		// Basic metric with 1 field, 0 timestamp
-		metric.New("cpu", map[string]string{}, map[string]interface{}{"value": 42.0}, time.Unix(0, 0)),
+		metric.New("cpu", map[string]string{}, map[string]any{"value": 42.0}, time.Unix(0, 0)),
 		// Basic metric with 1 field, different timestamp
-		metric.New("cpu", map[string]string{}, map[string]interface{}{"value": 20.0}, time.Now()),
+		metric.New("cpu", map[string]string{}, map[string]any{"value": 20.0}, time.Now()),
 		// Metric with a field
-		metric.New("cpu", map[string]string{"x": "y"}, map[string]interface{}{"value": 18.0}, time.Now()),
+		metric.New("cpu", map[string]string{"x": "y"}, map[string]any{"value": 18.0}, time.Now()),
 		// Tracking metric
 		tm,
 		// Metric with lots of tag types
 		metric.New(
 			"cpu",
 			map[string]string{},
-			map[string]interface{}{
+			map[string]any{
 				"value_f64":        20.0,
 				"value_uint64":     uint64(10),
 				"value_int16":      int16(5),
@@ -225,9 +273,6 @@ func TestDiskBufferTrackingDroppedFromOldWal(t *testing.T) {
 			time.Now(),
 		),
 	}
-
-	// call manually so that we can properly use metric.ToBytes() without having initialized a buffer
-	registerGob()
 
 	// Prefill the WAL file
 	path := t.TempDir()
@@ -265,10 +310,6 @@ func TestDiskBufferTrackingDroppedFromOldWal(t *testing.T) {
 // special test we use tracking metrics as e.g. used for Kafka or MQTT.
 // Related to https://github.com/influxdata/telegraf/issues/16981
 func TestDiskBufferTrackingOnOutputOutage(t *testing.T) {
-	// Make sure we can serialize the metrics by manually registering the binary
-	// serializer. In real-world this is done during setting up Telegraf.
-	registerGob()
-
 	// Create some tracking metrics with a callback that records the accepted
 	// metrics (or at least the tracking ID).
 	const count = 10
@@ -283,7 +324,7 @@ func TestDiskBufferTrackingOnOutputOutage(t *testing.T) {
 		m := metric.New(
 			"cpu",
 			map[string]string{},
-			map[string]interface{}{"value": i},
+			map[string]any{"value": i},
 			time.Unix(0, 0),
 		)
 		tm, tid := metric.WithTracking(m, func(di telegraf.DeliveryInfo) {

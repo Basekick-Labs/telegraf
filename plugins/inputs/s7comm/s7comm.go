@@ -102,7 +102,7 @@ type fieldMapping struct {
 	convert     converterFunc
 }
 
-type converterFunc func([]byte) interface{}
+type converterFunc func([]byte) any
 
 func (*S7comm) SampleConfig() string {
 	return sampleConfig
@@ -153,6 +153,7 @@ func (s *S7comm) Init() error {
 func (s *S7comm) Start(telegraf.Accumulator) error {
 	s.Log.Debugf("Connecting to %q...", s.Server)
 	if err := s.handler.Connect(); err != nil {
+		s.handler.Close()
 		return &internal.StartupError{
 			Err:   fmt.Errorf("connecting to %q failed: %w", s.Server, err),
 			Retry: true,

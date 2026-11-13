@@ -3,6 +3,7 @@ package jenkins
 
 import (
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -106,7 +107,7 @@ type mockHandler struct {
 	// responseMap is the path to response interface
 	// we will output the serialized response in json when serving http
 	// example '/computer/api/json': *gojenkins.
-	responseMap map[string]interface{}
+	responseMap map[string]any
 }
 
 func (h mockHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -158,7 +159,7 @@ func TestInitFail(t *testing.T) {
 
 func TestInit(t *testing.T) {
 	mh := mockHandler{
-		responseMap: map[string]interface{}{
+		responseMap: map[string]any{
 			"/api/json": struct{}{},
 		},
 	}
@@ -205,12 +206,12 @@ func TestInit(t *testing.T) {
 func TestGatherFail(t *testing.T) {
 	tests := []struct {
 		name     string
-		response map[string]interface{}
+		response map[string]any
 		expected string
 	}{
 		{
 			name: "bad node data",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/api/json": struct{}{},
 				"/computer/api/json": nodeResponse{
 					Computers: []node{
@@ -224,7 +225,7 @@ func TestGatherFail(t *testing.T) {
 		},
 		{
 			name: "bad inner jobs",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/computer/api/json": nil,
 				"/api/json": &jobResponse{
 					Jobs: []innerJob{
@@ -236,7 +237,7 @@ func TestGatherFail(t *testing.T) {
 		},
 		{
 			name: "bad build info",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/computer/api/json": nil,
 				"/api/json": &jobResponse{
 					Jobs: []innerJob{
@@ -300,7 +301,7 @@ func TestGatherFail(t *testing.T) {
 						"source": "127.0.0.1",
 						"port":   "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"busy_executors":  0,
 						"total_executors": 0,
 					},
@@ -323,12 +324,12 @@ func TestGatherFail(t *testing.T) {
 func TestGatherNodeData(t *testing.T) {
 	tests := []struct {
 		name     string
-		response map[string]interface{}
+		response map[string]any
 		expected []telegraf.Metric
 	}{
 		{
 			name: "empty monitor data",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/api/json": struct{}{},
 				"/computer/api/json": nodeResponse{
 					Computers: []node{
@@ -344,7 +345,7 @@ func TestGatherNodeData(t *testing.T) {
 						"source": "127.0.0.1",
 						"port":   "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"busy_executors":  0,
 						"total_executors": 0,
 					},
@@ -358,7 +359,7 @@ func TestGatherNodeData(t *testing.T) {
 						"node_name": "master",
 						"status":    "online",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"num_executors": int64(0),
 					},
 					time.Unix(0, 0),
@@ -367,7 +368,7 @@ func TestGatherNodeData(t *testing.T) {
 		},
 		{
 			name: "normal response",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/api/json": struct{}{},
 				"/computer/api/json": nodeResponse{
 					BusyExecutors:  4,
@@ -407,7 +408,7 @@ func TestGatherNodeData(t *testing.T) {
 						"source": "127.0.0.1",
 						"port":   "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"busy_executors":  4,
 						"total_executors": 8,
 					},
@@ -424,7 +425,7 @@ func TestGatherNodeData(t *testing.T) {
 						"disk_path": "/path/1",
 						"temp_path": "/path/2",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"num_executors":    int64(0),
 						"response_time":    int64(10032),
 						"disk_available":   float64(123),
@@ -440,7 +441,7 @@ func TestGatherNodeData(t *testing.T) {
 		},
 		{
 			name: "filtered nodes included",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/api/json": struct{}{},
 				"/computer/api/json": nodeResponse{
 					BusyExecutors:  4,
@@ -458,7 +459,7 @@ func TestGatherNodeData(t *testing.T) {
 						"source": "127.0.0.1",
 						"port":   "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"busy_executors":  4,
 						"total_executors": 8,
 					},
@@ -468,7 +469,7 @@ func TestGatherNodeData(t *testing.T) {
 		},
 		{
 			name: "filtered nodes excluded",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/api/json": struct{}{},
 				"/computer/api/json": nodeResponse{
 					BusyExecutors:  4,
@@ -486,7 +487,7 @@ func TestGatherNodeData(t *testing.T) {
 						"source": "127.0.0.1",
 						"port":   "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"busy_executors":  4,
 						"total_executors": 8,
 					},
@@ -496,7 +497,7 @@ func TestGatherNodeData(t *testing.T) {
 		},
 		{
 			name: "slave offline",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/api/json": struct{}{},
 				"/computer/api/json": nodeResponse{
 					BusyExecutors:  4,
@@ -518,7 +519,7 @@ func TestGatherNodeData(t *testing.T) {
 						"source": "127.0.0.1",
 						"port":   "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"busy_executors":  4,
 						"total_executors": 8,
 					},
@@ -532,7 +533,7 @@ func TestGatherNodeData(t *testing.T) {
 						"node_name": "slave",
 						"status":    "offline",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"num_executors": 1,
 					},
 					time.Unix(0, 0),
@@ -596,7 +597,7 @@ func TestGatherNodeData(t *testing.T) {
 }
 
 func TestGatherLabels(t *testing.T) {
-	response := map[string]interface{}{
+	response := map[string]any{
 		"/api/json": struct{}{},
 		"/computer/api/json": nodeResponse{
 			BusyExecutors:  4,
@@ -633,7 +634,7 @@ func TestGatherLabels(t *testing.T) {
 				"source": "127.0.0.1",
 				"port":   "",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"busy_executors":  4,
 				"total_executors": 8,
 			},
@@ -648,7 +649,7 @@ func TestGatherLabels(t *testing.T) {
 				"status":    "online",
 				"labels":    "project_a,testing",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"num_executors": int64(0),
 				"response_time": int64(54321),
 			},
@@ -663,7 +664,7 @@ func TestGatherLabels(t *testing.T) {
 				"status":    "online",
 				"labels":    "none",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"num_executors": int64(0),
 				"response_time": int64(12345),
 			},
@@ -727,12 +728,12 @@ func TestGatherJobBuilds(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		response map[string]interface{}
+		response map[string]any
 		expected []telegraf.Metric
 	}{
 		{
 			name: "multiple builds",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/api/json": &jobResponse{
 					Jobs: []innerJob{
 						{Name: "pipeline"},
@@ -774,7 +775,7 @@ func TestGatherJobBuilds(t *testing.T) {
 						"source": "127.0.0.1",
 						"port":   "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"busy_executors":  0,
 						"total_executors": 0,
 					},
@@ -789,7 +790,7 @@ func TestGatherJobBuilds(t *testing.T) {
 						"result":  "SUCCESS",
 						"parents": "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"duration":    int64(10000),
 						"number":      int64(1),
 						"result_code": 0,
@@ -805,7 +806,7 @@ func TestGatherJobBuilds(t *testing.T) {
 						"result":  "FAILURE",
 						"parents": "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"duration":    int64(20000),
 						"number":      int64(2),
 						"result_code": 1,
@@ -821,7 +822,7 @@ func TestGatherJobBuilds(t *testing.T) {
 						"result":  "SUCCESS",
 						"parents": "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"duration":    int64(30000),
 						"number":      int64(3),
 						"result_code": 0,
@@ -832,7 +833,7 @@ func TestGatherJobBuilds(t *testing.T) {
 		},
 		{
 			name: "running build skipped",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/api/json": &jobResponse{
 					Jobs: []innerJob{
 						{Name: "pipeline"},
@@ -867,7 +868,7 @@ func TestGatherJobBuilds(t *testing.T) {
 						"source": "127.0.0.1",
 						"port":   "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"busy_executors":  0,
 						"total_executors": 0,
 					},
@@ -882,7 +883,7 @@ func TestGatherJobBuilds(t *testing.T) {
 						"result":  "SUCCESS",
 						"parents": "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"duration":    int64(15000),
 						"number":      int64(2),
 						"result_code": 0,
@@ -893,7 +894,7 @@ func TestGatherJobBuilds(t *testing.T) {
 		},
 		{
 			name: "max build age filters old builds",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/api/json": &jobResponse{
 					Jobs: []innerJob{
 						{Name: "pipeline"},
@@ -936,7 +937,7 @@ func TestGatherJobBuilds(t *testing.T) {
 						"source": "127.0.0.1",
 						"port":   "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"busy_executors":  0,
 						"total_executors": 0,
 					},
@@ -951,7 +952,7 @@ func TestGatherJobBuilds(t *testing.T) {
 						"result":  "SUCCESS",
 						"parents": "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"duration":    int64(10000),
 						"number":      int64(3),
 						"result_code": 0,
@@ -962,7 +963,7 @@ func TestGatherJobBuilds(t *testing.T) {
 		},
 		{
 			name: "last build fallback",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/api/json": &jobResponse{
 					Jobs: []innerJob{
 						{Name: "pipeline"},
@@ -988,7 +989,7 @@ func TestGatherJobBuilds(t *testing.T) {
 						"source": "127.0.0.1",
 						"port":   "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"busy_executors":  0,
 						"total_executors": 0,
 					},
@@ -1003,7 +1004,7 @@ func TestGatherJobBuilds(t *testing.T) {
 						"result":  "SUCCESS",
 						"parents": "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"duration":    int64(12000),
 						"number":      int64(5),
 						"result_code": 0,
@@ -1014,7 +1015,7 @@ func TestGatherJobBuilds(t *testing.T) {
 		},
 		{
 			name: "no build when last build invalid",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/api/json": &jobResponse{
 					Jobs: []innerJob{
 						{Name: "pipeline"},
@@ -1033,7 +1034,7 @@ func TestGatherJobBuilds(t *testing.T) {
 						"source": "127.0.0.1",
 						"port":   "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"busy_executors":  0,
 						"total_executors": 0,
 					},
@@ -1046,7 +1047,7 @@ func TestGatherJobBuilds(t *testing.T) {
 			// All valid builds should still be reported even if an old build
 			// appears between newer ones (i.e. non-descending order).
 			name: "old build among new builds",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/api/json": &jobResponse{
 					Jobs: []innerJob{
 						{Name: "pipeline"},
@@ -1086,7 +1087,7 @@ func TestGatherJobBuilds(t *testing.T) {
 						"source": "127.0.0.1",
 						"port":   "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"busy_executors":  0,
 						"total_executors": 0,
 					},
@@ -1101,7 +1102,7 @@ func TestGatherJobBuilds(t *testing.T) {
 						"result":  "SUCCESS",
 						"parents": "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"duration":    int64(10000),
 						"number":      int64(1),
 						"result_code": 0,
@@ -1117,7 +1118,7 @@ func TestGatherJobBuilds(t *testing.T) {
 						"result":  "SUCCESS",
 						"parents": "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"duration":    int64(30000),
 						"number":      int64(3),
 						"result_code": 0,
@@ -1183,7 +1184,7 @@ func TestGatherBuildFetchErrorPartial(t *testing.T) {
 	// Build 2 returns an HTTP error, but builds 1 and 3 succeed.
 	// Metrics should still be emitted for the successful builds,
 	// and the error should be recorded via acc.AddError.
-	response := map[string]interface{}{
+	response := map[string]any{
 		"/api/json": &jobResponse{
 			Jobs: []innerJob{
 				{Name: "pipeline"},
@@ -1218,7 +1219,7 @@ func TestGatherBuildFetchErrorPartial(t *testing.T) {
 				"source": "127.0.0.1",
 				"port":   "",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"busy_executors":  0,
 				"total_executors": 0,
 			},
@@ -1233,7 +1234,7 @@ func TestGatherBuildFetchErrorPartial(t *testing.T) {
 				"result":  "SUCCESS",
 				"parents": "",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"duration":    int64(10000),
 				"number":      int64(1),
 				"result_code": 0,
@@ -1249,7 +1250,7 @@ func TestGatherBuildFetchErrorPartial(t *testing.T) {
 				"result":  "SUCCESS",
 				"parents": "",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"duration":    int64(30000),
 				"number":      int64(3),
 				"result_code": 0,
@@ -1319,7 +1320,7 @@ func TestGatherBuildsCappedAt20(t *testing.T) {
 
 	// Build the job response with 25 builds (newest-first)
 	builds := make([]jobBuild, totalBuilds)
-	for i := 0; i < totalBuilds; i++ {
+	for i := range totalBuilds {
 		builds[i] = jobBuild{Number: int64(totalBuilds - i)}
 	}
 
@@ -1329,7 +1330,7 @@ func TestGatherBuildsCappedAt20(t *testing.T) {
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.EscapedPath()
-		var resp interface{}
+		var resp any
 
 		switch path {
 		case "/", "/api/json":
@@ -1394,12 +1395,12 @@ func TestGatherBuildsCappedAt20(t *testing.T) {
 func TestGatherJobs(t *testing.T) {
 	tests := []struct {
 		name     string
-		response map[string]interface{}
+		response map[string]any
 		expected []telegraf.Metric
 	}{
 		{
 			name: "empty job",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/api/json": &jobResponse{},
 			},
 			expected: []telegraf.Metric{
@@ -1409,7 +1410,7 @@ func TestGatherJobs(t *testing.T) {
 						"source": "127.0.0.1",
 						"port":   "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"busy_executors":  0,
 						"total_executors": 0,
 					},
@@ -1419,7 +1420,7 @@ func TestGatherJobs(t *testing.T) {
 		},
 		{
 			name: "without build",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/api/json": &jobResponse{
 					Jobs: []innerJob{
 						{Name: "job1"},
@@ -1434,7 +1435,7 @@ func TestGatherJobs(t *testing.T) {
 						"source": "127.0.0.1",
 						"port":   "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"busy_executors":  0,
 						"total_executors": 0,
 					},
@@ -1444,7 +1445,7 @@ func TestGatherJobs(t *testing.T) {
 		},
 		{
 			name: "ignore building job",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/api/json": &jobResponse{
 					Jobs: []innerJob{
 						{Name: "job1"},
@@ -1466,7 +1467,7 @@ func TestGatherJobs(t *testing.T) {
 						"source": "127.0.0.1",
 						"port":   "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"busy_executors":  0,
 						"total_executors": 0,
 					},
@@ -1476,7 +1477,7 @@ func TestGatherJobs(t *testing.T) {
 		},
 		{
 			name: "ignore old build",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/api/json": &jobResponse{
 					Jobs: []innerJob{
 						{Name: "job1"},
@@ -1499,7 +1500,7 @@ func TestGatherJobs(t *testing.T) {
 						"source": "127.0.0.1",
 						"port":   "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"busy_executors":  0,
 						"total_executors": 0,
 					},
@@ -1509,7 +1510,7 @@ func TestGatherJobs(t *testing.T) {
 		},
 		{
 			name: "normal",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/api/json": &jobResponse{
 					Jobs: []innerJob{
 						{Name: "job1"},
@@ -1548,7 +1549,7 @@ func TestGatherJobs(t *testing.T) {
 						"source": "127.0.0.1",
 						"port":   "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"busy_executors":  0,
 						"total_executors": 0,
 					},
@@ -1563,7 +1564,7 @@ func TestGatherJobs(t *testing.T) {
 						"result":  "SUCCESS",
 						"parents": "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"duration":    int64(25558),
 						"number":      int64(3),
 						"result_code": 0,
@@ -1579,7 +1580,7 @@ func TestGatherJobs(t *testing.T) {
 						"result":  "FAILURE",
 						"parents": "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"duration":    int64(1558),
 						"number":      int64(1),
 						"result_code": 1,
@@ -1590,7 +1591,7 @@ func TestGatherJobs(t *testing.T) {
 		},
 		{
 			name: "with space",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/api/json": &jobResponse{
 					Jobs: []innerJob{
 						{Name: "job 1"},
@@ -1616,7 +1617,7 @@ func TestGatherJobs(t *testing.T) {
 						"source": "127.0.0.1",
 						"port":   "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"busy_executors":  0,
 						"total_executors": 0,
 					},
@@ -1631,7 +1632,7 @@ func TestGatherJobs(t *testing.T) {
 						"result":  "SUCCESS",
 						"parents": "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"duration":    int64(25558),
 						"number":      int64(3),
 						"result_code": 0,
@@ -1642,7 +1643,7 @@ func TestGatherJobs(t *testing.T) {
 		},
 		{
 			name: "gather metrics for nested jobs with space exercising append slice behaviour",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/api/json": &jobResponse{
 					Jobs: []innerJob{
 						{Name: "l1"},
@@ -1682,7 +1683,7 @@ func TestGatherJobs(t *testing.T) {
 						"source": "127.0.0.1",
 						"port":   "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"busy_executors":  0,
 						"total_executors": 0,
 					},
@@ -1697,7 +1698,7 @@ func TestGatherJobs(t *testing.T) {
 						"result":  "SUCCESS",
 						"parents": "l1/l2/job 1",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"duration":    int64(25558),
 						"result_code": 0,
 						"number":      0,
@@ -1708,7 +1709,7 @@ func TestGatherJobs(t *testing.T) {
 		},
 		{
 			name: "gather sub jobs, jobs filter",
-			response: map[string]interface{}{
+			response: map[string]any{
 				"/api/json": &jobResponse{
 					Jobs: []innerJob{
 						{Name: "apps"},
@@ -1814,7 +1815,7 @@ func TestGatherJobs(t *testing.T) {
 						"source": "127.0.0.1",
 						"port":   "",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"busy_executors":  0,
 						"total_executors": 0,
 					},
@@ -1829,7 +1830,7 @@ func TestGatherJobs(t *testing.T) {
 						"result":  "SUCCESS",
 						"parents": "apps/k8s-cloud",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"duration":    int64(87832),
 						"number":      int64(1),
 						"result_code": 0,
@@ -1845,7 +1846,7 @@ func TestGatherJobs(t *testing.T) {
 						"result":  "SUCCESS",
 						"parents": "apps/k8s-cloud",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"duration":    int64(91558),
 						"number":      int64(1),
 						"result_code": 0,
@@ -1861,7 +1862,7 @@ func TestGatherJobs(t *testing.T) {
 						"result":  "SUCCESS",
 						"parents": "apps/k8s-cloud",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"duration":    int64(76558),
 						"number":      int64(4),
 						"result_code": 0,
@@ -1877,7 +1878,7 @@ func TestGatherJobs(t *testing.T) {
 						"result":  "FAILURE",
 						"parents": "apps",
 					},
-					map[string]interface{}{
+					map[string]any{
 						"duration":    int64(1558),
 						"number":      int64(1),
 						"result_code": 1,
@@ -1948,6 +1949,155 @@ func TestGatherJobs(t *testing.T) {
 
 			actual := acc.GetTelegrafMetrics()
 			testutil.RequireMetricsEqual(t, tt.expected, actual, options...)
+		})
+	}
+}
+
+func TestInitBuildTags(t *testing.T) {
+	tests := []struct {
+		name      string
+		buildTags []string
+		expected  string
+	}{
+		{
+			name: "unset",
+		},
+		{
+			name:      "valid",
+			buildTags: []string{"display_name", "description"},
+		},
+		{
+			name:      "invalid",
+			buildTags: []string{"display_name", "foo"},
+			expected:  `invalid value "foo" in build_tags`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plugin := &Jenkins{
+				BuildTags: tt.buildTags,
+				Log:       testutil.Logger{},
+			}
+			err := plugin.Init()
+			if tt.expected == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.expected)
+		})
+	}
+}
+
+func TestGatherJobBuildTags(t *testing.T) {
+	ts := httptest.NewServer(mockHandler{
+		responseMap: map[string]any{
+			"/api/json": &jobResponse{
+				Jobs: []innerJob{{Name: "job1"}},
+			},
+			"/computer/api/json": nodeResponse{},
+			"/job/job1/api/json": &jobResponse{
+				Builds: []jobBuild{{Number: 2}, {Number: 1}},
+			},
+			"/job/job1/1/api/json": &buildResponse{
+				Result:      "SUCCESS",
+				Duration:    1000,
+				Number:      1,
+				Timestamp:   (time.Now().Unix() - int64(time.Minute.Seconds())) * 1000,
+				DisplayName: "#1 release-1.2",
+				Description: "triggered by PR",
+			},
+			"/job/job1/2/api/json": &buildResponse{
+				Result:      "FAILURE",
+				Duration:    2000,
+				Number:      2,
+				Timestamp:   (time.Now().Unix() - int64(time.Minute.Seconds())) * 1000,
+				DisplayName: "#2 release-1.3",
+			},
+		},
+	})
+	defer ts.Close()
+
+	baseTags := func(result string, extra map[string]string) map[string]string {
+		tags := map[string]string{
+			"source":  "127.0.0.1",
+			"port":    "",
+			"name":    "job1",
+			"result":  result,
+			"parents": "",
+		}
+		maps.Copy(tags, extra)
+		return tags
+	}
+	jobMetrics := func(tags1, tags2 map[string]string) []telegraf.Metric {
+		return []telegraf.Metric{
+			metric.New(
+				"jenkins",
+				map[string]string{"source": "127.0.0.1", "port": ""},
+				map[string]any{"busy_executors": 0, "total_executors": 0},
+				time.Unix(0, 0),
+			),
+			metric.New(
+				"jenkins_job",
+				baseTags("SUCCESS", tags1),
+				map[string]any{"duration": int64(1000), "number": int64(1), "result_code": 0},
+				time.Unix(0, 0),
+			),
+			metric.New(
+				"jenkins_job",
+				baseTags("FAILURE", tags2),
+				map[string]any{"duration": int64(2000), "number": int64(2), "result_code": 1},
+				time.Unix(0, 0),
+			),
+		}
+	}
+
+	tests := []struct {
+		name      string
+		buildTags []string
+		expected  []telegraf.Metric
+	}{
+		{
+			name:     "unset",
+			expected: jobMetrics(nil, nil),
+		},
+		{
+			name:      "display name only",
+			buildTags: []string{"display_name"},
+			expected: jobMetrics(
+				map[string]string{"display_name": "#1 release-1.2"},
+				map[string]string{"display_name": "#2 release-1.3"},
+			),
+		},
+		{
+			name:      "display name and description",
+			buildTags: []string{"display_name", "description"},
+			expected: jobMetrics(
+				map[string]string{"display_name": "#1 release-1.2", "description": "triggered by PR"},
+				map[string]string{"display_name": "#2 release-1.3"},
+			),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plugin := &Jenkins{
+				URL:             ts.URL,
+				MaxBuildAge:     config.Duration(time.Hour),
+				ResponseTimeout: config.Duration(time.Second),
+				BuildTags:       tt.buildTags,
+				Log:             testutil.Logger{},
+			}
+			require.NoError(t, plugin.Init())
+
+			var acc testutil.Accumulator
+			require.NoError(t, plugin.Gather(&acc))
+			require.Empty(t, acc.Errors)
+
+			options := []cmp.Option{
+				testutil.IgnoreTime(),
+				testutil.SortMetrics(),
+				testutil.IgnoreTags("port"),
+			}
+			testutil.RequireMetricsEqual(t, tt.expected, acc.GetTelegrafMetrics(), options...)
 		})
 	}
 }

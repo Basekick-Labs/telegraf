@@ -51,7 +51,8 @@ plugin ordering. See [CONFIGURATION.md][CONFIGURATION.md] for more details.
 Parquet files require a schema when writing files. To generate a schema,
 Telegraf will go through all grouped metrics and generate an Apache Arrow schema
 based on the union of all fields and tags. If a field and tag have the same name
-then the field takes precedence.
+then the field takes precedence. Columns are ordered by name, with the
+timestamp column last.
 
 The consequence of schema generation is that the very first flush sequence a
 metric is seen takes much longer due to the additional looping through the
@@ -61,6 +62,10 @@ faster.
 When writing to a file, the schema is used to look for each value and if it is
 not present a null value is added. The result is that if additional fields are
 present after the first metric flush those fields are omitted.
+
+The `timestamp_field_name` column holds the metric time, so a field or tag with
+that same name is dropped and logged. Set `timestamp_field_name` to another name
+or rename the field or tag to keep both.
 
 ### Write
 
@@ -82,12 +87,18 @@ of this occurring.
 
 ## File Rotation
 
-If a file with the same target name exists at start, the existing file is
-rotated to avoid over-writing it or conflicting schema.
+Files are named `<measurement>-<YYYYMMDDhhmmss>-<uuid>.parquet`, so existing
+files are never opened for writing and support multiple writers.
 
 File rotation is available via a time based interval that a user can optionally
-set. Due to the usage of a buffered writer, a size based rotation is not
-possible as the file may not actually get data at each interval.
+set, measured from the time the current file was created. Due to the usage of a
+buffered writer, a size based rotation is not possible as the file may not
+actually get data at each interval.
+
+The file is not inspected between rotations, so a file removed or replaced
+underneath the agent goes unnoticed and everything written to it is lost until
+the next rotation opens a new file. With `rotation_interval` unset there is no
+next rotation, so those metrics are lost for the lifetime of the agent.
 
 ## Explore Parquet Files
 

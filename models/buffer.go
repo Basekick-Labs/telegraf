@@ -2,10 +2,8 @@ package models
 
 import (
 	"fmt"
-	"sync"
 
 	"github.com/influxdata/telegraf"
-	"github.com/influxdata/telegraf/metric"
 	"github.com/influxdata/telegraf/selfstat"
 )
 
@@ -13,8 +11,6 @@ var (
 	AgentMetricsWritten  = selfstat.Register("agent", "metrics_written", make(map[string]string))
 	AgentMetricsRejected = selfstat.Register("agent", "metrics_rejected", make(map[string]string))
 	AgentMetricsDropped  = selfstat.Register("agent", "metrics_dropped", make(map[string]string))
-
-	registerGob = sync.OnceFunc(func() { metric.Init() })
 )
 
 type Transaction struct {
@@ -31,7 +27,7 @@ type Transaction struct {
 	valid bool
 
 	// Internal state that can be used by the buffer implementation
-	state interface{}
+	state any
 }
 
 func (tx *Transaction) AcceptAll() {
@@ -98,8 +94,6 @@ type BufferStats struct {
 //
 //nolint:revive //will move to structs later
 func NewBuffer(name, id, alias string, capacity int, strategy, path string, diskSync bool) (Buffer, error) {
-	registerGob()
-
 	tags := map[string]string{
 		"_id":    id,
 		"output": name,
@@ -114,8 +108,20 @@ func NewBuffer(name, id, alias string, capacity int, strategy, path string, disk
 		return NewMemoryBuffer(capacity, bs)
 	case "disk_write_through":
 		return NewDiskBuffer(id, path, bs, diskSync)
+	case "discard":
+		return newDiscardBuffer(bs), nil
 	}
 	return nil, fmt.Errorf("invalid buffer strategy %q", strategy)
+}
+
+// CheckBufferSettings verifies that the buffer settings are valid without
+// opening or allocating the buffer.
+func CheckBufferSettings(strategy string) error {
+	switch strategy {
+	case "", "memory", "disk_write_through":
+		return nil
+	}
+	return fmt.Errorf("invalid buffer strategy %q", strategy)
 }
 
 func NewBufferStats(tags map[string]string, capacity int) BufferStats {

@@ -2,6 +2,10 @@ package newrelic
 
 import (
 	"math"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"runtime"
 	"testing"
 	"time"
 
@@ -100,7 +104,7 @@ func TestNewRelic_Write(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var auditLog map[string]interface{}
+			var auditLog map[string]any
 			nr := &NewRelic{}
 			var err error
 			nr.harvestor, err = telemetry.NewHarvester(
@@ -109,7 +113,7 @@ func TestNewRelic_Write(t *testing.T) {
 					cfg.APIKey = "dummyTestKey"
 					cfg.HarvestPeriod = 0
 					cfg.HarvestTimeout = 0
-					cfg.AuditLogger = func(e map[string]interface{}) {
+					cfg.AuditLogger = func(e map[string]any) {
 						auditLog = e
 					}
 				})
@@ -190,4 +194,41 @@ func TestNewRelic_Connect(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLocalAddress(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Binding to 127.0.0.2 requires a loopback alias outside of Linux")
+	}
+
+	remote := make(chan string, 1)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case remote <- r.RemoteAddr:
+		default:
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer ts.Close()
+
+	nr := &NewRelic{
+		InsightsKey:  "12345",
+		Timeout:      config.Duration(time.Second * 5),
+		MetricURL:    ts.URL,
+		LocalAddress: "127.0.0.2",
+	}
+	require.NoError(t, nr.Connect())
+	require.NoError(t, nr.Write(testutil.MockMetrics()))
+
+	host, _, err := net.SplitHostPort(<-remote)
+	require.NoError(t, err)
+	require.Equal(t, "127.0.0.2", host)
+}
+
+func TestInvalidLocalAddress(t *testing.T) {
+	nr := &NewRelic{
+		InsightsKey:  "12345",
+		LocalAddress: "::1",
+	}
+	require.ErrorContains(t, nr.Connect(), "invalid local address")
 }
