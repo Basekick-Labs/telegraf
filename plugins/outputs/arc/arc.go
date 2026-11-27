@@ -188,10 +188,37 @@ func (a *Arc) Write(metrics []telegraf.Metric) error {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, err := io.ReadAll(resp.Body)
+		var statusErr error
 		if err != nil {
-			return fmt.Errorf("arc returned status %d (failed to read response body: %w)", resp.StatusCode, err)
+			statusErr = fmt.Errorf("arc returned status %d (failed to read response body: %w)", resp.StatusCode, err)
+		} else {
+			statusErr = fmt.Errorf("arc returned status %d: %s", resp.StatusCode, string(body))
 		}
-		return fmt.Errorf("arc returned status %d: %s", resp.StatusCode, string(body))
+
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			switch resp.StatusCode {
+			case http.StatusUnauthorized, http.StatusForbidden:
+				a.Log.Errorf("Arc authentication failed for %d metric(s): %v", len(metrics), statusErr)
+			case http.StatusRequestTimeout, http.StatusTooManyRequests:
+				// Keep the batch so the server can recover.
+			default:
+				if resp.StatusCode == http.StatusRequestEntityTooLarge {
+					statusErr = fmt.Errorf("%w; lower metric_batch_size and retry", statusErr)
+				}
+				a.Log.Errorf("Arc returned a non-retryable status for %d metric(s); dropping the batch: %v", len(metrics), statusErr)
+				rejected := make([]int, len(metrics))
+				for i := range metrics {
+					rejected[i] = i
+				}
+				return &internal.PartialWriteError{
+					Err:                 statusErr,
+					MetricsReject:       rejected,
+					MetricsRejectErrors: []error{statusErr},
+				}
+			}
+		}
+
+		return statusErr
 	}
 
 	return nil

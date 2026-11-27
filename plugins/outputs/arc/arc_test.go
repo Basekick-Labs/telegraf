@@ -16,7 +16,9 @@ import (
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/config"
+	"github.com/influxdata/telegraf/internal"
 	"github.com/influxdata/telegraf/metric"
+	"github.com/influxdata/telegraf/models"
 	"github.com/influxdata/telegraf/testutil"
 )
 
@@ -265,6 +267,78 @@ func TestWriteServerError(t *testing.T) {
 	}
 
 	require.ErrorContains(t, plugin.Write(metrics), "returned status 500")
+}
+
+func TestWriteStatusCodes(t *testing.T) {
+	tests := []struct {
+		name            string
+		statusCode      int
+		batchIsRejected bool
+	}{
+		{name: "bad request", statusCode: http.StatusBadRequest, batchIsRejected: true},
+		{name: "not found", statusCode: http.StatusNotFound, batchIsRejected: true},
+		{name: "payload too large", statusCode: http.StatusRequestEntityTooLarge, batchIsRejected: true},
+		{name: "unprocessable entity", statusCode: http.StatusUnprocessableEntity, batchIsRejected: true},
+		{name: "unauthorised", statusCode: http.StatusUnauthorized},
+		{name: "forbidden", statusCode: http.StatusForbidden},
+		{name: "request timeout", statusCode: http.StatusRequestTimeout},
+		{name: "too many requests", statusCode: http.StatusTooManyRequests},
+		{name: "service unavailable", statusCode: http.StatusServiceUnavailable},
+		{name: "internal server error", statusCode: http.StatusInternalServerError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var requests atomic.Int32
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				w.WriteHeader(tt.statusCode)
+				_, _ = w.Write([]byte("request rejected"))
+			}))
+			defer ts.Close()
+
+			plugin := &Arc{
+				URL:             ts.URL,
+				Timeout:         config.Duration(5 * time.Second),
+				ContentEncoding: "identity",
+			}
+			require.NoError(t, plugin.Init())
+
+			output, err := models.NewRunningOutput(plugin, &models.OutputConfig{}, 10, 100)
+			require.NoError(t, err)
+
+			metrics := []telegraf.Metric{
+				metric.New("cpu", map[string]string{"host": "server01"}, map[string]any{"value": 1.0}, time.Unix(1, 0)),
+				metric.New("cpu", map[string]string{"host": "server02"}, map[string]any{"value": 2.0}, time.Unix(2, 0)),
+			}
+			for _, m := range metrics {
+				output.AddMetric(m)
+			}
+
+			writeErr := output.WriteBatch()
+			require.Error(t, writeErr)
+			require.ErrorContains(t, writeErr, "request rejected")
+
+			var partialErr *internal.PartialWriteError
+			if tt.batchIsRejected {
+				require.ErrorAs(t, writeErr, &partialErr)
+				require.Equal(t, []int{0, 1}, partialErr.MetricsReject)
+				require.Len(t, partialErr.MetricsRejectErrors, 1)
+				require.Zero(t, output.BufferLength())
+
+				before := requests.Load()
+				require.NoError(t, output.WriteBatch())
+				require.Equal(t, before, requests.Load(), "rejected metrics should not be retried")
+			} else {
+				require.NotErrorAs(t, writeErr, &partialErr)
+				require.Equal(t, len(metrics), output.BufferLength())
+
+				before := requests.Load()
+				require.Error(t, output.WriteBatch())
+				require.Equal(t, before+1, requests.Load(), "retryable failures should keep the batch")
+			}
+		})
+	}
 }
 
 func TestMessagePackEncoding(t *testing.T) {
