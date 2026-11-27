@@ -16,7 +16,10 @@ import (
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/config"
+	"github.com/influxdata/telegraf/internal"
 	"github.com/influxdata/telegraf/metric"
+	"github.com/influxdata/telegraf/models"
+	"github.com/influxdata/telegraf/selfstat"
 	"github.com/influxdata/telegraf/testutil"
 )
 
@@ -265,6 +268,77 @@ func TestWriteServerError(t *testing.T) {
 	}
 
 	require.ErrorContains(t, plugin.Write(metrics), "returned status 500")
+}
+
+func TestWriteRejectsCollidingMetrics(t *testing.T) {
+	var receivedBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var err error
+		receivedBody, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("failed to read request body: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+
+	plugin := &Arc{
+		URL:             ts.URL,
+		Timeout:         config.Duration(5 * time.Second),
+		ContentEncoding: "identity",
+	}
+	outputName := "arc_test_collision"
+	outputID := "arc_test_collision"
+	tags := map[string]string{"output": outputName, "_id": outputID}
+	metricsRejected := selfstat.Register("write", "metrics_rejected", tags)
+	metricsWritten := selfstat.Register("write", "metrics_written", tags)
+	metricsRejected.Set(0)
+	metricsWritten.Set(0)
+	t.Cleanup(func() {
+		selfstat.Unregister("write", "metrics_rejected", tags)
+		selfstat.Unregister("write", "metrics_written", tags)
+	})
+
+	runningOutput, err := models.NewRunningOutput(plugin, &models.OutputConfig{
+		Name: outputName,
+		ID:   outputID,
+	}, 10, 10)
+	require.NoError(t, err)
+	t.Cleanup(runningOutput.Close)
+	require.NoError(t, runningOutput.Init())
+	require.NoError(t, runningOutput.Connect())
+
+	metrics := []telegraf.Metric{
+		metric.New("cpu", map[string]string{"host": "first"}, map[string]any{"usage": 1.0}, time.Unix(1, 0)),
+		metric.New("cpu", map[string]string{"usage": "collision"}, map[string]any{"usage": 2.0}, time.Unix(2, 0)),
+		metric.New("cpu", nil, map[string]any{"time": 3.0}, time.Unix(3, 0)),
+		metric.New("cpu", map[string]string{"host": "last"}, map[string]any{"usage": 4.0}, time.Unix(4, 0)),
+	}
+	for _, m := range metrics {
+		runningOutput.AddMetric(m)
+	}
+
+	writeErr := runningOutput.WriteBatch()
+	require.Error(t, writeErr)
+	var partialWriteErr *internal.PartialWriteError
+	require.ErrorAs(t, writeErr, &partialWriteErr)
+	require.Equal(t, []int{0, 3}, partialWriteErr.MetricsAccept)
+	require.Equal(t, []int{1, 2}, partialWriteErr.MetricsReject)
+	require.EqualValues(t, 2, metricsRejected.Get())
+	require.EqualValues(t, 2, metricsWritten.Get())
+	require.Zero(t, runningOutput.BufferLength())
+
+	reader := msgp.NewReader(bytes.NewReader(receivedBody))
+	decoded, err := reader.ReadIntf()
+	require.NoError(t, err)
+	message, ok := decoded.(map[string]any)
+	require.True(t, ok)
+	columns, ok := message["columns"].(map[string]any)
+	require.True(t, ok)
+	require.Len(t, columns["host"], 2)
+	require.Len(t, columns["usage"], 2)
 }
 
 func TestMessagePackEncoding(t *testing.T) {

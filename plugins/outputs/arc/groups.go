@@ -50,6 +50,27 @@ func (g *group) add(m telegraf.Metric) {
 	g.rows++
 }
 
+func columnCollision(m telegraf.Metric) error {
+	fields := make(map[string]struct{}, len(m.FieldList()))
+	for _, field := range m.FieldList() {
+		if field.Key == "time" {
+			return fmt.Errorf("field name %q conflicts with the timestamp column", field.Key)
+		}
+		fields[field.Key] = struct{}{}
+	}
+
+	for _, tag := range m.TagList() {
+		if tag.Key == "time" {
+			return fmt.Errorf("tag name %q conflicts with the timestamp column", tag.Key)
+		}
+		if _, found := fields[tag.Key]; found {
+			return fmt.Errorf("tag and field share the column name %q", tag.Key)
+		}
+	}
+
+	return nil
+}
+
 func (g *group) produceMessage() (map[string]any, error) {
 	// Verify all columns have the same number of rows
 	for k, v := range g.columns {
